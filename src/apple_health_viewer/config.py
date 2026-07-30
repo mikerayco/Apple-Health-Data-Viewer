@@ -73,8 +73,9 @@ def base_config(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
         "SESSION_COOKIE_HTTPONLY": True,
         "SESSION_COOKIE_SAMESITE": "Strict",
         "SESSION_COOKIE_SECURE": False,
+        "MAX_CONTENT_LENGTH": 100 * 1024**3,
         "MAX_FORM_MEMORY_SIZE": 512 * 1024,
-        "MAX_FORM_PARTS": 32,
+        "MAX_FORM_PARTS": 100_000,
     }
 
 

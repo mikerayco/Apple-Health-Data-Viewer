@@ -11,12 +11,15 @@
   HKCharacteristicTypeIdentifierBloodType CDATA #REQUIRED
   HKCharacteristicTypeIdentifierFitzpatrickSkinType CDATA #REQUIRED
   HKCharacteristicTypeIdentifierCardioFitnessMedicationsUse CDATA #REQUIRED>
-<!ELEMENT Record (MetadataEntry*)>
+<!ELEMENT Record (MetadataEntry|HeartRateVariabilityMetadataList)*>
 <!ATTLIST Record type CDATA #REQUIRED unit CDATA #IMPLIED value CDATA #IMPLIED
   sourceName CDATA #REQUIRED sourceVersion CDATA #IMPLIED device CDATA #IMPLIED
   creationDate CDATA #IMPLIED startDate CDATA #REQUIRED endDate CDATA #REQUIRED>
 <!ELEMENT MetadataEntry EMPTY>
 <!ATTLIST MetadataEntry key CDATA #REQUIRED value CDATA #REQUIRED>
+<!ELEMENT HeartRateVariabilityMetadataList (InstantaneousBeatsPerMinute*)>
+<!ELEMENT InstantaneousBeatsPerMinute EMPTY>
+<!ATTLIST InstantaneousBeatsPerMinute bpm CDATA #REQUIRED time CDATA #REQUIRED>
 <!ELEMENT Workout (MetadataEntry|WorkoutEvent|WorkoutRoute|WorkoutStatistics)*>
 <!ATTLIST Workout workoutActivityType CDATA #REQUIRED duration CDATA #IMPLIED
   durationUnit CDATA #IMPLIED sourceName CDATA #REQUIRED startDate CDATA #REQUIRED
@@ -57,9 +60,23 @@
  <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Synthetic Watch" unit="count/min"
      startDate="2024-01-02 07:00:00 +0000" endDate="2024-01-02 07:00:00 +0000" value="60"/>
  <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" sourceName="Synthetic Watch" unit="ms"
-     startDate="2024-01-02 07:05:00 +0000" endDate="2024-01-02 07:05:00 +0000" value="50"/>
+     startDate="2024-01-02 07:05:00 +0000" endDate="2024-01-02 07:05:00 +0000" value="50">
+  <HeartRateVariabilityMetadataList>
+   <InstantaneousBeatsPerMinute bpm="60" time="0.0"/>
+   <InstantaneousBeatsPerMinute bpm="62" time="1.0"/>
+  </HeartRateVariabilityMetadataList>
+ </Record>
  <Record type="HKQuantityTypeIdentifierBodyMass" sourceName="Synthetic Scale" unit="kg"
      startDate="2024-01-02 07:10:00 +0000" endDate="2024-01-02 07:10:00 +0000" value="70"/>
+ <Record type="HKQuantityTypeIdentifierBloodGlucose" sourceName="Synthetic Glucose Meter" unit="mg/dL"
+     startDate="2024-01-02 07:15:00 +0000" endDate="2024-01-02 07:15:00 +0000" value="90">
+  <MetadataEntry key="HKBloodGlucoseMealTime" value="1"/>
+ </Record>
+ <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Synthetic Watch" unit="count"
+     creationDate="2024-01-02 09:05:00 +0000" startDate="2024-01-02 08:00:00 +0000"
+     endDate="2024-01-02 09:00:00 +0000" value="1000">
+  <MetadataEntry key="HKMetadataKeySyncIdentifier" value="synthetic-watch-steps-1"/>
+ </Record>
  <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Synthetic Watch"
      startDate="2024-01-01 23:00:00 +0000" endDate="2024-01-02 07:00:00 +0000"
      value="HKCategoryValueSleepAnalysisInBed"/>

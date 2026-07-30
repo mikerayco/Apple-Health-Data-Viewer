@@ -82,3 +82,119 @@ def delete_setting(path: str | Path, key: str) -> None:
 def schema_version(path: str | Path) -> int:
     with closing(connect(path)) as connection:
         return int(connection.execute("PRAGMA user_version").fetchone()[0])
+
+
+def create_import(
+    path: str | Path,
+    *,
+    job_id: str,
+    source_kind: str,
+    source_label: str,
+    source_id: str | None,
+) -> int:
+    with closing(connect(path)) as connection, connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO import_history(job_id, status, source_kind, source_label, source_id)
+            VALUES (?, 'pending', ?, ?, ?)
+            """,
+            (job_id, source_kind, source_label, source_id),
+        )
+        return int(cursor.lastrowid)
+
+
+_IMPORT_UPDATE_FIELDS = {
+    "status",
+    "finished_at",
+    "parser_version",
+    "warning_count",
+    "record_count",
+    "workout_count",
+    "duplicate_count",
+    "health_database_bytes",
+    "export_date",
+    "error_code",
+}
+
+
+def update_import(path: str | Path, job_id: str, **values: object) -> None:
+    invalid = set(values) - _IMPORT_UPDATE_FIELDS
+    if invalid:
+        raise ValueError(f"Unsupported import fields: {', '.join(sorted(invalid))}")
+    if not values:
+        return
+    assignments = ", ".join(f"{key} = ?" for key in values)
+    parameters = [*values.values(), job_id]
+    with closing(connect(path)) as connection, connection:
+        connection.execute(
+            f"UPDATE import_history SET {assignments} WHERE job_id = ?",
+            parameters,
+        )
+
+
+def get_import(path: str | Path, job_id: str) -> dict[str, object] | None:
+    with closing(connect(path)) as connection:
+        row = connection.execute(
+            "SELECT * FROM import_history WHERE job_id = ?", (job_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def recent_imports(path: str | Path, limit: int = 10) -> list[dict[str, object]]:
+    with closing(connect(path)) as connection:
+        rows = connection.execute(
+            "SELECT * FROM import_history ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def recover_interrupted_imports(path: str | Path) -> int:
+    with closing(connect(path)) as connection, connection:
+        cursor = connection.execute(
+            """
+            UPDATE import_history
+            SET status = 'failed', finished_at = CURRENT_TIMESTAMP, error_code = 'interrupted'
+            WHERE status IN ('pending', 'running')
+            """
+        )
+        return cursor.rowcount
+
+
+def add_managed_source(
+    path: str | Path,
+    *,
+    source_id: str,
+    kind: str,
+    label: str,
+    source_path: str | Path,
+    size_bytes: int,
+) -> None:
+    with closing(connect(path)) as connection, connection:
+        connection.execute(
+            """
+            INSERT INTO managed_sources(id, kind, label, path, size_bytes)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (source_id, kind, label, str(source_path), size_bytes),
+        )
+
+
+def get_managed_source(path: str | Path, source_id: str) -> dict[str, object] | None:
+    with closing(connect(path)) as connection:
+        row = connection.execute(
+            "SELECT * FROM managed_sources WHERE id = ?", (source_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def managed_sources(path: str | Path) -> list[dict[str, object]]:
+    with closing(connect(path)) as connection:
+        rows = connection.execute(
+            "SELECT * FROM managed_sources ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def remove_managed_source(path: str | Path, source_id: str) -> None:
+    with closing(connect(path)) as connection, connection:
+        connection.execute("DELETE FROM managed_sources WHERE id = ?", (source_id,))

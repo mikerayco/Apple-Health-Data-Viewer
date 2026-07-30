@@ -9,6 +9,7 @@ from flask import Flask
 
 from .config import configure_app
 from .database import init_database
+from .import_manager import ImportManager
 from .version import __version__
 from .views import web
 
@@ -21,6 +22,7 @@ def create_app(overrides: dict[str, Any] | None = None) -> Flask:
     data_dir = Path(app.config["DATA_DIR"])
     data_dir.mkdir(parents=True, exist_ok=True)
     init_database(app.config["SETTINGS_DATABASE"])
+    app.extensions["import_manager"] = ImportManager(app)
 
     app.register_blueprint(web)
 

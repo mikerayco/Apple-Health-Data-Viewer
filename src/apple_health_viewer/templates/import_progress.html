@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Import · Apple Health Data Viewer{% endblock %}
+{% block content %}
+<section class="import-page" data-import-status-url="{{ url_for('web.import_status', job_id=job.id) }}" data-import-state="{{ job.status }}" data-import-page>
+  <div class="import-heading">
+    <span class="eyebrow"><i></i> Transactional import</span>
+    <h1 data-import-title>{% if job.status == "succeeded" %}Import complete.{% elif job.status in ("failed", "cancelled") %}Import stopped safely.{% else %}Building your local view.{% endif %}</h1>
+    <p data-import-phase>{{ job.phase }}</p>
+  </div>
+
+  <div class="import-meter" aria-live="polite">
+    <progress class="meter-track" data-import-meter max="1" value="{{ job.progress }}">{{ (job.progress * 100) | round | int }}%</progress>
+    <div class="meter-labels"><span data-import-percent>{{ (job.progress * 100) | round | int }}%</span><span data-import-items>{{ job.processed_items }} items processed</span></div>
+  </div>
+
+  <div class="import-source-summary">
+    <div><small>Source</small><strong>{{ job.source_label }}</strong></div>
+    <div><small>Method</small><strong>{{ job.source_kind | replace("_", " ") | title }}</strong></div>
+    <div><small>Safety</small><strong>Previous database preserved</strong></div>
+  </div>
+
+  <div class="import-result" data-import-result {% if job.status not in ("succeeded", "failed", "cancelled") %}hidden{% endif %}>
+    {% if job.status == "succeeded" and job.result %}
+      <span class="result-mark success-mark" aria-hidden="true">✓</span>
+      <div><h2>Snapshot activated</h2><p>{{ job.result.record_count }} records and {{ job.result.workout_count }} workouts were stored. {{ job.result.duplicate_count }} exact duplicates were skipped.</p></div>
+    {% elif job.status in ("failed", "cancelled") %}
+      <span class="result-mark error-mark" aria-hidden="true">!</span>
+      <div><h2>No database was replaced</h2><p>{{ job.error_message or "The import did not complete." }}</p></div>
+    {% endif %}
+  </div>
+
+  <div class="import-actions">
+    <form method="post" action="{{ url_for('web.cancel_import', job_id=job.id) }}" data-cancel-form {% if job.status in ("succeeded", "failed", "cancelled") %}hidden{% endif %}>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="secondary-button" type="submit">Cancel safely</button>
+    </form>
+    <a class="primary-button" href="{{ url_for('web.data_quality') }}" data-quality-link {% if job.status != "succeeded" %}hidden{% endif %}>Review data quality</a>
+    <a class="text-button" href="{{ url_for('web.setup') }}">Back to imports</a>
+  </div>
+</section>
+{% endblock %}

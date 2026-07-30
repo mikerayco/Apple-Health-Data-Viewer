@@ -2,48 +2,35 @@
 {% block title %}Overview · Apple Health Data Viewer{% endblock %}
 {% block content %}
 <section class="page-head overview-head">
-  <div><span class="eyebrow"><i></i> Personal health overview</span><h1>Good morning.</h1><p>Your data story will begin here after the first import.</p></div>
-  <div class="date-control" aria-label="Date controls unavailable until import">
-    <span><small>Viewing</small><strong>Last 90 days</strong></span><button type="button" disabled>Change</button>
-  </div>
+  <div><span class="eyebrow"><i></i> Personal health overview</span><h1>{% if quality %}Your data is ready.{% else %}Good morning.{% endif %}</h1><p>{% if quality %}The raw snapshot is safely imported. Metric interpretation arrives in Phase 3.{% else %}Your data story will begin here after the first import.{% endif %}</p></div>
+  <div class="date-control" aria-label="Date controls unavailable until metric aggregation"><span><small>Viewing</small><strong>All imported data</strong></span><button type="button" disabled>Change</button></div>
 </section>
 
-<section class="empty-story" aria-labelledby="empty-title">
+<section class="empty-story{% if quality %} imported-story{% endif %}" aria-labelledby="empty-title">
   <div class="story-copy">
-    <span class="story-index">00 / READY</span>
-    <h2 id="empty-title">A clear view is waiting for your data.</h2>
-    <p>Import an Apple Health export to reveal trends, comparisons, coverage, and source-aware estimates—without sending a record anywhere.</p>
-    <a class="primary-button arrow-button" href="{{ url_for('web.setup') }}">Configure data source <span aria-hidden="true">→</span></a>
+    <span class="story-index">{% if quality %}01 / IMPORTED{% else %}00 / READY{% endif %}</span>
+    <h2 id="empty-title">{% if quality %}A trustworthy foundation before the insights.{% else %}A clear view is waiting for your data.{% endif %}</h2>
+    <p>{% if quality %}Phase 2 stored source-aware raw records, skipped exact duplicates, and preserved unsupported types in a transparent inventory.{% else %}Import an Apple Health export to reveal trends, comparisons, coverage, and source-aware estimates—without sending a record anywhere.{% endif %}</p>
+    <a class="primary-button arrow-button" href="{{ url_for('web.data_quality') if quality else url_for('web.setup') }}">{{ "Review data quality" if quality else "Configure data source" }} <span aria-hidden="true">→</span></a>
   </div>
   <div class="empty-chart" aria-hidden="true">
     <div class="chart-labels"><span>12k</span><span>8k</span><span>4k</span><span>0</span></div>
-    <svg viewBox="0 0 620 240" preserveAspectRatio="none">
-      <path class="chart-area" d="M0 210 C70 185 90 205 145 154 S235 192 280 129 S365 156 410 93 S500 122 545 60 S600 68 620 42 L620 240 L0 240Z"/>
-      <path class="chart-line" d="M0 210 C70 185 90 205 145 154 S235 192 280 129 S365 156 410 93 S500 122 545 60 S600 68 620 42"/>
-    </svg>
+    <svg viewBox="0 0 620 240" preserveAspectRatio="none"><path class="chart-area" d="M0 210 C70 185 90 205 145 154 S235 192 280 129 S365 156 410 93 S500 122 545 60 S600 68 620 42 L620 240 L0 240Z"/><path class="chart-line" d="M0 210 C70 185 90 205 145 154 S235 192 280 129 S365 156 410 93 S500 122 545 60 S600 68 620 42"/></svg>
     <div class="chart-months"><span>Jan</span><span>Mar</span><span>May</span><span>Jul</span><span>Sep</span><span>Nov</span></div>
   </div>
 </section>
 
-<section class="metric-strip" aria-label="Metrics awaiting import">
-  {% for label in ("Steps / day", "Sleep", "Resting HR", "Exercise") %}
-    <article><span>{{ "%02d" | format(loop.index) }}</span><h3>{{ label }}</h3><strong>—</strong><small>Awaiting data</small></article>
-  {% endfor %}
+<section class="metric-strip" aria-label="{{ 'Import inventory summary' if quality else 'Metrics awaiting import' }}">
+  {% if quality %}
+    {% set cards = (("Stored records", quality.manifest.record_count, "raw records"), ("Workouts", quality.manifest.workout_count, "sessions"), ("Health types", quality.inventory | length, "identified"), ("Warnings", quality.manifest.warning_count, "review quality")) %}
+    {% for label, value, note in cards %}<article><span>{{ "%02d" | format(loop.index) }}</span><h3>{{ label }}</h3><strong>{{ value }}</strong><small>{{ note }}</small></article>{% endfor %}
+  {% else %}
+    {% for label in ("Steps / day", "Sleep", "Resting HR", "Exercise") %}<article><span>{{ "%02d" | format(loop.index) }}</span><h3>{{ label }}</h3><strong>—</strong><small>Awaiting data</small></article>{% endfor %}
+  {% endif %}
 </section>
 
 <section class="dashboard-lower">
-  <article class="insight-panel">
-    <span class="eyebrow"><i></i> Descriptive insights</span>
-    <h2>Changes worth noticing,<br>never medical conclusions.</h2>
-    <ul>
-      <li><span>01</span>Period comparisons with visible coverage</li>
-      <li><span>02</span>Personal baselines and consistency</li>
-      <li><span>03</span>Transparent source overlap</li>
-    </ul>
-  </article>
-  <article class="privacy-panel">
-    <span class="lock-mark" aria-hidden="true"></span>
-    <div><small>Privacy boundary</small><h2>Everything stays here.</h2><p>Loopback server · Local SQLite · No external requests</p></div>
-  </article>
+  <article class="insight-panel"><span class="eyebrow"><i></i> Descriptive insights</span><h2>Changes worth noticing,<br>never medical conclusions.</h2><ul><li><span>01</span>Period comparisons with visible coverage</li><li><span>02</span>Personal baselines and consistency</li><li><span>03</span>Transparent source overlap</li></ul></article>
+  <article class="privacy-panel"><span class="lock-mark" aria-hidden="true"></span><div><small>Privacy boundary</small><h2>Everything stays here.</h2><p>Loopback server · Local SQLite · No external requests</p></div></article>
 </section>
 {% endblock %}

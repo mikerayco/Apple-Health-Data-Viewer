@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apple-health-data-viewer"
-version = "0.1.0"
+version = "0.2.0"
 description = "A private, local-first dashboard for Apple Health exports"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -40,5 +40,5 @@ apple_health_viewer = [
 ]
 
 [tool.apple-health-data-viewer]
-phase = 1
+phase = 2
 fixture-policy = "synthetic-only"

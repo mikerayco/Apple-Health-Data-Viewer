@@ -64,7 +64,7 @@ class ApplicationShellTests(AppTestCase):
     def test_health_endpoint_is_minimal(self) -> None:
         response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json, {"phase": 1, "status": "ok", "version": "0.1.0"})
+        self.assertEqual(response.json, {"phase": 2, "status": "ok", "version": "0.2.0"})
         self.assertNotIn(str(self.data_dir).encode(), response.data)
 
     def test_security_headers_are_applied(self) -> None:
@@ -188,7 +188,7 @@ class SourceConfigurationTests(AppTestCase):
 
 class DatabaseFoundationTests(AppTestCase):
     def test_initial_migration_and_defaults(self) -> None:
-        self.assertEqual(schema_version(self.database), 1)
+        self.assertEqual(schema_version(self.database), 2)
         with closing(sqlite3.connect(self.database)) as connection:
             tables = {
                 row[0]
@@ -196,11 +196,11 @@ class DatabaseFoundationTests(AppTestCase):
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                 )
             }
-            migration = connection.execute(
-                "SELECT version, name FROM schema_migrations"
-            ).fetchone()
-        self.assertTrue({"settings", "schema_migrations", "import_history"} <= tables)
-        self.assertEqual(migration, (1, "001_initial.sql"))
+            migrations = connection.execute(
+                "SELECT version, name FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        self.assertTrue({"settings", "schema_migrations", "import_history", "managed_sources"} <= tables)
+        self.assertEqual(migrations, [(1, "001_initial.sql"), (2, "002_import_sources.sql")])
         self.assertEqual(get_setting(self.database, "theme"), "system")
         self.assertEqual(get_setting(self.database, "unit_system"), "metric")
 
@@ -214,4 +214,4 @@ class DatabaseFoundationTests(AppTestCase):
         )
         with closing(sqlite3.connect(self.database)) as connection:
             count = connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
-        self.assertEqual(count, 1)
+        self.assertEqual(count, 2)

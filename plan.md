@@ -96,7 +96,8 @@ A v1 is successful when a user can:
 
 #### Heart and vitals
 
-- Heart rate, resting heart rate, walking heart rate, HRV SDNN, respiratory rate, oxygen saturation, VO2 max, and blood pressure when present.
+- Heart rate, resting heart rate, walking heart rate, HRV SDNN, respiratory rate, oxygen saturation, VO2 max, blood pressure, and blood glucose when present.
+- Blood glucose uses individual timestamped readings, source/device, and meal-context metadata when exported; Phase 3 supports `mg/dL` and `mmol/L` conversion without diagnostic ranges.
 - Mean/median/range and latest value with timestamp.
 - Scatter or range views where daily averages would hide meaningful variation.
 - Explicit measurement counts and coverage to prevent sparse data from appearing continuous.
@@ -475,7 +476,7 @@ Record hardware, fixture size, record count, parser version, elapsed time, peak 
 
 - Metric registry, unit normalization/conversion, timezone/date semantics.
 - Daily aggregates and coverage calculations.
-- Activity, vitals, sleep, and body measurement logic.
+- Activity, vitals (including blood glucose), sleep, and body measurement logic.
 - Source-overlap spike and validated interval-reconciliation rules for the accepted combined-estimate policy.
 - Golden tests against synthetic fixtures and private manual cross-checks.
 
@@ -514,13 +515,13 @@ Record hardware, fixture size, record count, parser version, elapsed time, peak 
 ## 11. v1 acceptance checklist
 
 - [ ] Native setup documented and tested on macOS, Windows, and Linux.
-- [ ] Docker Compose is optional and documented; native remains primary.
-- [ ] ZIP upload, folder upload, configured path, and UI local-path import work.
-- [ ] Multi-gigabyte XML import is streaming and bounded-memory.
-- [ ] Failed/cancelled import leaves the active database untouched.
-- [ ] Successful complete re-import atomically replaces health data while retaining settings.
-- [ ] App-managed uploads are retained by default, disk usage is visible, and deleting a retained source leaves processed data usable.
-- [ ] Configured-path imports do not duplicate the source.
+- [x] Docker Compose is optional and documented; native remains primary.
+- [x] ZIP upload, folder upload, configured path, and UI local-path import work.
+- [x] Multi-gigabyte XML import is streaming and bounded-memory.
+- [x] Failed/cancelled import leaves the active database untouched.
+- [x] Successful complete re-import atomically replaces health data while retaining settings.
+- [x] App-managed uploads are retained by default, disk usage is visible, and deleting a retained source leaves processed data usable.
+- [x] Configured-path imports do not duplicate the source.
 - [ ] Dashboard covers all confirmed categories and hides unavailable metrics cleanly.
 - [ ] Workout activity-type filtering and summaries work with unknown future types.
 - [ ] GPX route and ECG waveform views work without network access.

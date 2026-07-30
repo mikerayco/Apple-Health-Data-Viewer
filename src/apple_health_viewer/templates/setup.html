@@ -1,57 +1,72 @@
 {% extends "base.html" %}
-{% block title %}Set up · Apple Health Data Viewer{% endblock %}
+{% block title %}Import · Apple Health Data Viewer{% endblock %}
 {% block content %}
-<section class="setup-hero">
+<section class="setup-hero compact-hero">
   <div class="setup-copy">
     <span class="eyebrow"><i></i> Private by design</span>
     <h1>Your health history,<br><em>kept on your machine.</em></h1>
-    <p>Choose a complete Apple Health export. The viewer will process it locally, build a private database, and make years of data easier to understand.</p>
+    <p>Choose a complete Apple Health export. The viewer streams it into a staged local database, validates the result, and only then activates it.</p>
     <div class="promise-row" aria-label="Privacy promises">
-      <span>No cloud upload</span><span>No telemetry</span><span>Works offline</span>
+      <span>No cloud upload</span><span>Safe replacement</span><span>Works offline</span>
     </div>
   </div>
-  <div class="setup-illustration" aria-hidden="true">
-    <div class="pulse-card">
-      <span>LOCAL / PRIVATE</span>
-      <svg viewBox="0 0 360 150" role="img">
-        <path class="pulse-grid" d="M0 30H360M0 75H360M0 120H360M45 0V150M90 0V150M135 0V150M180 0V150M225 0V150M270 0V150M315 0V150"/>
-        <path class="pulse-line" d="M0 88 C25 88 34 86 46 88 L76 88 L89 78 L101 101 L118 35 L137 113 L151 88 C176 88 185 87 202 88 L229 88 L241 80 L251 96 L266 57 L280 102 L294 88 C320 88 336 88 360 88"/>
-      </svg>
-      <div><strong>10 years</strong><small>becomes one clear view</small></div>
-    </div>
+  <div class="storage-card">
+    <small>Local storage available</small><strong>{{ free_bytes | bytesize }}</strong><span>of {{ total_bytes | bytesize }}</span>
+    <div class="storage-rule"><i></i></div>
+    <p>Uploads are retained locally for future reprocessing. You can remove them without deleting processed data.</p>
   </div>
 </section>
 
 <section class="setup-section" aria-labelledby="choose-source">
   <div class="section-heading">
     <div><span class="step-number">01</span><h2 id="choose-source">Choose your export</h2></div>
-    <p>Import processing arrives in Phase 2. You can configure an existing local path now and preview the dashboard shell.</p>
+    <p>Only one import runs at a time. A failed or cancelled import leaves the previous health database untouched.</p>
   </div>
 
   <div class="source-grid">
-    <article class="source-card muted-card">
+    <article class="source-card">
       <div class="source-icon zip-icon" aria-hidden="true"><span>ZIP</span></div>
-      <div><h3>Apple Health ZIP</h3><p>Select the untouched archive exported from the Health app.</p></div>
-      <button class="secondary-button" type="button" disabled>Choose ZIP · Phase 2</button>
+      <div><h3>Apple Health ZIP</h3><p>Upload the untouched archive. It remains local and is retained for future parser upgrades.</p></div>
+      <form class="upload-form" method="post" action="{{ url_for('web.upload_zip') }}" enctype="multipart/form-data" data-upload-form>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="file-button">
+          <input type="file" name="zip_file" accept=".zip,application/zip" required {% if import_busy %}disabled{% endif %}>
+          <span>Choose ZIP</span>
+        </label>
+        <button class="primary-button" type="submit" {% if import_busy %}disabled{% endif %}>Upload & import</button>
+      </form>
     </article>
 
-    <article class="source-card muted-card">
+    <article class="source-card">
       <div class="source-icon folder-icon" aria-hidden="true"><span></span></div>
-      <div><h3>Unzipped folder</h3><p>Choose the extracted folder containing <code>export.xml</code>.</p></div>
-      <button class="secondary-button" type="button" disabled>Choose folder · Phase 2</button>
+      <div><h3>Unzipped folder</h3><p>Upload the extracted folder containing <code>export.xml</code> and its linked files.</p></div>
+      <form class="upload-form" method="post" action="{{ url_for('web.upload_folder') }}" enctype="multipart/form-data" data-upload-form>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="file-button">
+          <input type="file" name="folder_files" webkitdirectory directory multiple required {% if import_busy %}disabled{% endif %}>
+          <span>Choose folder</span>
+        </label>
+        <button class="primary-button" type="submit" {% if import_busy %}disabled{% endif %}>Upload & import</button>
+      </form>
     </article>
 
     <article class="source-card featured-card">
       <div class="source-icon path-icon" aria-hidden="true"><span>/</span></div>
-      <div><h3>Existing local path</h3><p>Best for large exports: read files in place without creating another copy.</p></div>
-      {% if source_name %}
+      <div><h3>Existing local path</h3><p>Recommended for very large exports: read in place without creating another source copy.</p></div>
+      {% if source_name and source_origin != "retained upload" %}
         <div class="configured-source">
           <span>Configured</span><strong>{{ source_name }}</strong><small>via {{ source_origin }}</small>
         </div>
-        <form method="post" action="{{ url_for('web.remove_source') }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button class="text-button" type="submit">Remove saved source</button>
-        </form>
+        <div class="source-actions">
+          <form method="post" action="{{ url_for('web.import_configured_source') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="primary-button" type="submit" {% if import_busy %}disabled{% endif %}>Start import</button>
+          </form>
+          <form method="post" action="{{ url_for('web.remove_source') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="text-button" type="submit">Remove path</button>
+          </form>
+        </div>
       {% else %}
         <form class="path-form" method="post" action="{{ url_for('web.save_source') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -64,10 +79,55 @@
       {% endif %}
     </article>
   </div>
+  <div class="upload-progress" data-upload-progress hidden aria-live="polite">
+    <span>Uploading locally</span><progress max="100" value="0"></progress><strong>0%</strong>
+  </div>
 </section>
 
-<section class="setup-foot">
-  <div><span class="step-number">02</span><div><h2>See the shape of your dashboard</h2><p>Phase 1 contains no health values. Preview the empty, responsive interface before the import engine is connected.</p></div></div>
-  <a class="primary-button arrow-button" href="{{ url_for('web.overview') }}">Preview dashboard <span aria-hidden="true">→</span></a>
+{% if retained_sources %}
+<section class="source-library" aria-labelledby="retained-title">
+  <div class="section-heading">
+    <div><span class="step-number">02</span><h2 id="retained-title">Retained uploads</h2></div>
+    <p>These source copies remain in app-managed local storage. Removing one does not remove the active processed database.</p>
+  </div>
+  <div class="retained-list">
+    {% for source in retained_sources %}
+      <article>
+        <div><span>{{ "ZIP" if source.kind == "zip_upload" else "Folder" }}</span><strong>{{ source.label }}</strong><small>{{ source.size_bytes | bytesize }} · retained {{ source.created_at }}</small></div>
+        <div class="source-actions">
+          <form method="post" action="{{ url_for('web.reimport_managed_source', source_id=source.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="secondary-button" type="submit" {% if import_busy %}disabled{% endif %}>Re-import</button>
+          </form>
+          <form method="post" action="{{ url_for('web.delete_managed_source', source_id=source.id) }}" data-confirm="Delete this retained source copy? The processed database will remain.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="text-button danger-text" type="submit" {% if import_busy %}disabled{% endif %}>Delete source</button>
+          </form>
+        </div>
+      </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="import-history" aria-labelledby="history-title">
+  <div class="section-heading">
+    <div><span class="step-number">03</span><h2 id="history-title">Recent imports</h2></div>
+    {% if has_health_database %}<a href="{{ url_for('web.data_quality') }}">Open data quality →</a>{% endif %}
+  </div>
+  {% if import_history %}
+    <div class="history-table" role="table" aria-label="Recent imports">
+      {% for item in import_history %}
+        <a role="row" href="{{ url_for('web.import_progress', job_id=item.job_id) }}">
+          <span role="cell" class="status-{{ item.status }}">{{ item.status | title }}</span>
+          <strong role="cell">{{ item.source_label }}</strong>
+          <span role="cell">{{ item.record_count }} records</span>
+          <span role="cell">{{ item.started_at }}</span>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-history">No imports yet. Your first completed snapshot will appear here.</div>
+  {% endif %}
 </section>
 {% endblock %}

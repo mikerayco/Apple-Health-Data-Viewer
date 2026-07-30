@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Data Quality · Apple Health Data Viewer{% endblock %}
+{% block content %}
+<section class="page-head category-head">
+  <div><span class="eyebrow"><i></i> Coverage and provenance</span><h1>Data Quality</h1><p>What was found, what was stored, and what still needs interpretation.</p></div>
+  {% if quality %}<div class="date-control"><span><small>Export version</small><strong>{{ quality.manifest.export_version or "Unknown" }}</strong></span></div>{% endif %}
+</section>
+
+{% if not quality %}
+<section class="quality-empty"><span>NO DATASET</span><h2>Import a complete export to build its inventory.</h2><p>The inventory will expose unknown types, source coverage, files, exact duplicates, and warnings.</p><a class="primary-button" href="{{ url_for('web.setup') }}">Choose an export</a></section>
+{% else %}
+<section class="quality-summary">
+  <article><small>Stored records</small><strong>{{ quality.manifest.record_count }}</strong><span>{{ quality.manifest.workout_count }} workouts</span></article>
+  <article><small>Health types</small><strong>{{ quality.inventory | length }}</strong><span>imported and inventoried</span></article>
+  <article><small>Exact duplicates</small><strong>{{ quality.manifest.duplicate_count }}</strong><span>skipped safely</span></article>
+  <article><small>Warnings</small><strong>{{ quality.manifest.warning_count }}</strong><span>nonfatal import issues</span></article>
+</section>
+
+<section class="quality-section">
+  <div class="quality-heading"><div><span>01</span><h2>Type inventory</h2></div><p>“Inventory only” content is recognized but intentionally not visualized in v1.</p></div>
+  <div class="quality-table-wrap">
+    <table class="quality-table">
+      <thead><tr><th>Type</th><th>Kind</th><th>Status</th><th>Unit</th><th class="number-cell">Found</th><th class="number-cell">Stored</th></tr></thead>
+      <tbody>
+        {% for item in quality.inventory %}
+          <tr><td><strong>{{ item.type_identifier | replace("HKQuantityTypeIdentifier", "") | replace("HKCategoryTypeIdentifier", "") | replace("HKWorkoutActivityType", "") }}</strong></td><td>{{ item.element_kind }}</td><td><span class="support-status status-{{ item.support_status }}">{{ item.support_status | replace("_", " ") }}</span></td><td>{{ item.unit or "—" }}</td><td class="number-cell">{{ item.encountered_count }}</td><td class="number-cell">{{ item.stored_count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="quality-columns">
+  <section class="quality-section">
+    <div class="quality-heading"><div><span>02</span><h2>Sources</h2></div></div>
+    <div class="quality-list">
+      {% for source in quality.sources %}<article><div><strong>{{ source.name }}</strong><small>{{ source.version or "Version not exported" }}</small></div><span>{{ source.record_count }} records · {{ source.workout_count }} workouts</span></article>{% else %}<p>No sources were stored.</p>{% endfor %}
+    </div>
+  </section>
+  <section class="quality-section">
+    <div class="quality-heading"><div><span>03</span><h2>Linked files</h2></div></div>
+    <div class="quality-list">
+      {% for file in quality.files %}<article><div><strong>{{ file.kind | replace("_", " ") | title }}</strong><small>{{ file.size_bytes | bytesize }}</small></div><span>{{ file.count }} files</span></article>{% else %}<p>No linked files were found.</p>{% endfor %}
+    </div>
+  </section>
+</div>
+
+{% if quality.issues %}
+<section class="quality-section issue-section">
+  <div class="quality-heading"><div><span>04</span><h2>Import warnings</h2></div><p>Warnings did not prevent activation, but they remain visible.</p></div>
+  <div class="quality-list">{% for issue in quality.issues %}<article><div><strong>{{ issue.code | replace("_", " ") | title }}</strong><small>{{ issue.message }}</small></div><span>{{ issue.count }}</span></article>{% endfor %}</div>
+</section>
+{% endif %}
+
+<div class="method-note"><strong>Method note</strong><p>Phase 2 removes exact duplicates only. Source-overlap reconciliation and metric calculations—including blood glucose conversion—arrive in Phase 3.</p><span>Database {{ quality.database_bytes | bytesize }} · Exported {{ quality.manifest.export_date or "date unavailable" }}</span></div>
+{% endif %}
+{% endblock %}
