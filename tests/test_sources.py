@@ -85,6 +85,22 @@ class ZipSafetyTests(unittest.TestCase):
                 self.assertIn(b"<HealthData", opened.stream.read(4096))
             self.assertEqual(list(Path(directory).iterdir()), [archive_path])
 
+    def test_assets_are_scoped_to_selected_export_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "scoped.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr("apple_health_export/export.xml", "<HealthData/>")
+                archive.writestr("apple_health_export/workout-routes/route.gpx", "selected")
+                archive.writestr("workout-routes/route.gpx", "outside")
+                archive.writestr("unrelated.csv", "Sample,Amplitude\n0,1")
+            with open_export(SourceSpec("zip_upload", archive_path, "scoped.zip")) as opened:
+                self.assertEqual(
+                    {name for name, _size in opened.source_files},
+                    {"export.xml", "workout-routes/route.gpx"},
+                )
+                with opened.open_asset("workout-routes/route.gpx") as asset:
+                    self.assertEqual(asset.read(), b"selected")
+
     def test_zip_traversal_and_symlinks_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             traversal = Path(directory) / "traversal.zip"

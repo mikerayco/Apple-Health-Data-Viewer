@@ -44,6 +44,13 @@ from .sources import (
     retain_folder_upload,
     retain_zip_upload,
 )
+from .specialized import (
+    ecg_detail,
+    ecg_list,
+    workout_detail,
+    workout_list,
+    workout_route,
+)
 from .version import __version__
 
 web = Blueprint("web", __name__)
@@ -165,6 +172,16 @@ def _date_parameters() -> dict[str, str | None]:
 
 def _granularity_parameter() -> str | None:
     return request.args.get("granularity")
+
+
+def _integer_parameter(name: str, default: int) -> int:
+    value = request.args.get(name)
+    if value in {None, ""}:
+        return default
+    try:
+        return int(value)
+    except ValueError as error:
+        raise AnalyticsError("invalid_parameter", f"Choose a valid {name}.") from error
 
 
 def _filter_id(name: str) -> int | None:
@@ -449,12 +466,99 @@ def body():
 
 @web.get("/workouts")
 def workouts():
-    return _category("workouts", "workouts")
+    dashboard = analytics_error = None
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            window = resolve_window(connection, **_date_parameters())
+            dashboard = workout_list(
+                connection,
+                window,
+                _stored_setting("unit_system", "metric"),
+                activity_type=request.args.get("type") or None,
+                search=request.args.get("q") or None,
+                source_id=_filter_id("source"),
+                device_id=_filter_id("device"),
+                route_only=request.args.get("route") == "1",
+                page=_integer_parameter("page", 1),
+                per_page=_integer_parameter("per_page", 25),
+            )
+    except AnalyticsError as error:
+        analytics_error = error
+    return render_template(
+        "workouts.html",
+        **_page_context(
+            "workouts",
+            dashboard=dashboard,
+            analytics_error=analytics_error,
+            quality=_quality(),
+            selected_period=request.args.get("period", "30d"),
+            selected_granularity=request.args.get("granularity", "auto"),
+        ),
+    )
+
+
+@web.get("/workouts/<int:workout_id>")
+def workout(workout_id: int):
+    detail = analytics_error = None
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            detail = workout_detail(
+                connection,
+                workout_id,
+                _stored_setting("unit_system", "metric"),
+            )
+    except AnalyticsError as error:
+        analytics_error = error
+    if analytics_error and analytics_error.code == "not_found":
+        abort(404)
+    return render_template(
+        "workout_detail.html",
+        **_page_context("workouts", workout=detail, analytics_error=analytics_error),
+    )
 
 
 @web.get("/ecgs")
 def ecgs():
-    return _category("ecgs", "ecgs")
+    dashboard = analytics_error = None
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            window = resolve_window(connection, **_date_parameters())
+            dashboard = ecg_list(
+                connection,
+                window,
+                classification=request.args.get("classification") or None,
+                page=_integer_parameter("page", 1),
+                per_page=_integer_parameter("per_page", 25),
+            )
+    except AnalyticsError as error:
+        analytics_error = error
+    return render_template(
+        "ecgs.html",
+        **_page_context(
+            "ecgs",
+            dashboard=dashboard,
+            analytics_error=analytics_error,
+            quality=_quality(),
+            selected_period=request.args.get("period", "30d"),
+            selected_granularity=request.args.get("granularity", "auto"),
+        ),
+    )
+
+
+@web.get("/ecgs/<int:ecg_id>")
+def ecg(ecg_id: int):
+    detail = analytics_error = None
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            detail = ecg_detail(connection, ecg_id, include_samples=False)
+    except AnalyticsError as error:
+        analytics_error = error
+    if analytics_error and analytics_error.code == "not_found":
+        abort(404)
+    return render_template(
+        "ecg_detail.html",
+        **_page_context("ecgs", ecg=detail, analytics_error=analytics_error),
+    )
 
 
 def _category(key: str, active_page: str):
@@ -585,6 +689,104 @@ def sleep_trend_api():
         return jsonify({"status": error.code, "message": error.public_message}), status
 
 
+@web.get("/api/workouts")
+def workouts_api():
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            window = resolve_window(connection, **_date_parameters())
+            return jsonify(
+                {
+                    "status": "ready",
+                    **workout_list(
+                        connection,
+                        window,
+                        _stored_setting("unit_system", "metric"),
+                        activity_type=request.args.get("type") or None,
+                        search=request.args.get("q") or None,
+                        source_id=_filter_id("source"),
+                        device_id=_filter_id("device"),
+                        route_only=request.args.get("route") == "1",
+                        page=_integer_parameter("page", 1),
+                        per_page=_integer_parameter("per_page", 25),
+                    ),
+                }
+            )
+    except AnalyticsError as error:
+        status = 409 if error.code in {"empty", "reimport_required", "no_supported_metrics"} else 400
+        return jsonify({"status": error.code, "message": error.public_message}), status
+
+
+@web.get("/api/workouts/<int:workout_id>")
+def workout_api(workout_id: int):
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            return jsonify(
+                {
+                    "status": "ready",
+                    **workout_detail(
+                        connection,
+                        workout_id,
+                        _stored_setting("unit_system", "metric"),
+                    ),
+                }
+            )
+    except AnalyticsError as error:
+        status = 404 if error.code == "not_found" else 409 if error.code in {"empty", "reimport_required"} else 400
+        return jsonify({"status": error.code, "message": error.public_message}), status
+
+
+@web.get("/api/workouts/<int:workout_id>/route")
+def workout_route_api(workout_id: int):
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            return jsonify(
+                {
+                    "status": "ready",
+                    **workout_route(connection, workout_id, _integer_parameter("limit", 1200)),
+                }
+            )
+    except AnalyticsError as error:
+        status = 404 if error.code == "not_found" else 409 if error.code in {"empty", "reimport_required"} else 400
+        return jsonify({"status": error.code, "message": error.public_message}), status
+
+
+@web.get("/api/ecgs")
+def ecgs_api():
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            window = resolve_window(connection, **_date_parameters())
+            return jsonify(
+                {
+                    "status": "ready",
+                    **ecg_list(
+                        connection,
+                        window,
+                        classification=request.args.get("classification") or None,
+                        page=_integer_parameter("page", 1),
+                        per_page=_integer_parameter("per_page", 25),
+                    ),
+                }
+            )
+    except AnalyticsError as error:
+        status = 409 if error.code in {"empty", "reimport_required", "no_supported_metrics"} else 400
+        return jsonify({"status": error.code, "message": error.public_message}), status
+
+
+@web.get("/api/ecgs/<int:ecg_id>")
+def ecg_api(ecg_id: int):
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            return jsonify(
+                {
+                    "status": "ready",
+                    **ecg_detail(connection, ecg_id, _integer_parameter("limit", 5000)),
+                }
+            )
+    except AnalyticsError as error:
+        status = 404 if error.code == "not_found" else 409 if error.code in {"empty", "reimport_required"} else 400
+        return jsonify({"status": error.code, "message": error.public_message}), status
+
+
 @web.get("/api/insights")
 def insights_api():
     category = request.args.get("category")
@@ -668,7 +870,7 @@ def cycle_theme():
 
 @web.get("/healthz")
 def healthz():
-    return jsonify({"status": "ok", "version": __version__, "phase": 4})
+    return jsonify({"status": "ok", "version": __version__, "phase": 5})
 
 
 @web.app_template_filter("bytesize")

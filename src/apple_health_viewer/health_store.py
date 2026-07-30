@@ -4,25 +4,31 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC
 from hashlib import sha256
 import json
+import math
 from pathlib import Path
 import re
 import sqlite3
+from contextlib import AbstractContextManager
 from typing import BinaryIO, Callable, Iterable
 from urllib.parse import quote
 import xml.etree.ElementTree as ET
 
+from .assets import AssetImportCancelled, AssetParseError, parse_ecg_into, parse_gpx_into
 from .metrics import (
     METRICS_BY_IDENTIFIER,
     SLEEP_IDENTIFIER,
     AggregationCancelled,
     build_aggregates,
     normalize_record,
+    parse_health_datetime,
 )
+from .sources import SourceValidationError
 from .version import __version__
 
-HEALTH_SCHEMA_VERSION = 2
+HEALTH_SCHEMA_VERSION = 3
 BATCH_SIZE = 5_000
 HEADER_LIMIT = 1024 * 1024
 MAX_ATTRIBUTE_LENGTH = 64 * 1024
@@ -50,11 +56,13 @@ class ParseResult:
     source_fingerprint: str
     type_count: int
     source_count: int
+    route_count: int
+    ecg_count: int
 
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = OFF;
+PRAGMA journal_mode = DELETE;
 PRAGMA synchronous = OFF;
 
 CREATE TABLE manifest (
@@ -184,12 +192,18 @@ CREATE TABLE workouts (
   creation_date TEXT,
   start_date TEXT NOT NULL,
   end_date TEXT NOT NULL,
+  start_utc TEXT,
+  end_utc TEXT,
+  local_start_date TEXT,
   duration TEXT,
   duration_unit TEXT,
+  duration_seconds REAL,
   total_distance TEXT,
   total_distance_unit TEXT,
+  total_distance_m REAL,
   total_energy TEXT,
-  total_energy_unit TEXT
+  total_energy_unit TEXT,
+  total_energy_kcal REAL
 );
 
 CREATE TABLE workout_metadata (
@@ -220,9 +234,67 @@ CREATE TABLE workout_events (
 );
 
 CREATE TABLE workout_routes (
+  id INTEGER PRIMARY KEY,
   workout_id INTEGER NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
-  path TEXT NOT NULL
+  path TEXT NOT NULL,
+  point_count INTEGER NOT NULL DEFAULT 0,
+  segment_count INTEGER NOT NULL DEFAULT 0,
+  distance_m REAL,
+  elevation_gain_m REAL,
+  elevation_loss_m REAL,
+  min_latitude REAL,
+  max_latitude REAL,
+  min_longitude REAL,
+  max_longitude REAL,
+  start_time TEXT,
+  end_time TEXT,
+  UNIQUE(workout_id, path)
 );
+
+CREATE TABLE route_points (
+  route_id INTEGER NOT NULL REFERENCES workout_routes(id) ON DELETE CASCADE,
+  sequence INTEGER NOT NULL,
+  segment INTEGER NOT NULL DEFAULT 0,
+  latitude REAL NOT NULL,
+  longitude REAL NOT NULL,
+  elevation_m REAL,
+  recorded_at TEXT,
+  horizontal_accuracy_m REAL,
+  vertical_accuracy_m REAL,
+  speed_mps REAL,
+  course_degrees REAL,
+  PRIMARY KEY(route_id, sequence)
+) WITHOUT ROWID;
+
+CREATE TABLE ecgs (
+  id INTEGER PRIMARY KEY,
+  path TEXT NOT NULL UNIQUE,
+  recorded_at TEXT,
+  local_recorded_date TEXT,
+  duration_seconds REAL,
+  sample_rate_hz REAL,
+  classification TEXT,
+  symptoms TEXT,
+  device TEXT,
+  lead TEXT,
+  amplitude_unit TEXT,
+  sample_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE ecg_metadata (
+  ecg_id INTEGER NOT NULL REFERENCES ecgs(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  PRIMARY KEY(ecg_id, key)
+) WITHOUT ROWID;
+
+CREATE TABLE ecg_samples (
+  ecg_id INTEGER NOT NULL REFERENCES ecgs(id) ON DELETE CASCADE,
+  sequence INTEGER NOT NULL,
+  time_seconds REAL NOT NULL,
+  amplitude REAL NOT NULL,
+  PRIMARY KEY(ecg_id, sequence)
+) WITHOUT ROWID;
 
 CREATE TABLE activity_summaries (
   id INTEGER PRIMARY KEY,
@@ -273,7 +345,9 @@ CREATE INDEX records_source_idx ON records(source_id);
 CREATE INDEX records_metric_date_idx ON records(metric_key, local_start_date, start_utc);
 CREATE INDEX records_metric_value_idx ON records(metric_key, numeric_value);
 CREATE INDEX sleep_sessions_wake_idx ON sleep_sessions(wake_date);
-CREATE INDEX workouts_type_start_idx ON workouts(activity_type, start_date);
+CREATE INDEX workouts_type_start_idx ON workouts(activity_type, local_start_date);
+CREATE INDEX workout_routes_workout_idx ON workout_routes(workout_id);
+CREATE INDEX ecgs_recorded_idx ON ecgs(local_recorded_date, recorded_at);
 """
 
 
@@ -356,7 +430,7 @@ def _file_kind(path: str) -> str:
     lower = path.lower()
     if "/workout-routes/" in f"/{lower}" or lower.endswith(".gpx"):
         return "workout_route"
-    if "/electrocardiograms/" in f"/{lower}" or lower.endswith(".csv"):
+    if "/electrocardiograms/" in f"/{lower}" and lower.endswith(".csv"):
         return "electrocardiogram"
     if lower.endswith("export_cda.xml"):
         return "clinical_cda"
@@ -372,6 +446,33 @@ def create_health_database(path: Path) -> sqlite3.Connection:
     return connection
 
 
+def _duration_seconds(value: str | None, unit: str | None) -> float | None:
+    number = None
+    try:
+        number = float(value) if value is not None else None
+    except ValueError:
+        return None
+    factors = {"s": 1.0, "sec": 1.0, "min": 60.0, "hr": 3600.0, "h": 3600.0}
+    factor = factors.get((unit or "").strip())
+    if number is None or factor is None or not math.isfinite(number) or number < 0:
+        return None
+    converted = number * factor
+    return converted if math.isfinite(converted) else None
+
+
+def _workout_quantity(
+    identifier: str,
+    value: str | None,
+    unit: str | None,
+    start: str,
+    end: str,
+) -> float | None:
+    if value is None:
+        return None
+    normalized = normalize_record(identifier, unit, value, start, end)
+    return normalized.numeric_value
+
+
 def parse_export(
     stream: BinaryIO,
     database_path: Path,
@@ -380,6 +481,7 @@ def parse_export(
     source_files: list[tuple[str, int]],
     progress: Callable[[int, int, str], None],
     cancelled: Callable[[], bool],
+    asset_opener: Callable[[str], AbstractContextManager[BinaryIO]] | None = None,
 ) -> ParseResult:
     """Stream one complete export into a new staging database."""
     hashing = _HashingReader(stream)
@@ -405,6 +507,7 @@ def parse_export(
     )
     issue_counts: dict[tuple[str, str, str, str], int] = defaultdict(int)
     record_count = workout_count = duplicate_count = warning_count = 0
+    route_count = ecg_count = 0
     export_date: str | None = None
     locale: str | None = None
     profile_present = False
@@ -613,13 +716,36 @@ def parse_export(
                     add_issue("missing_workout_field", "Workout", identifier or "Unknown", "A workout was missing required attributes.")
                 else:
                     fingerprint = _fingerprint("Workout", attributes, child_payload)
+                    start_time = parse_health_datetime(start)
+                    end_time = parse_health_datetime(end)
+                    distance_m = _workout_quantity(
+                        "HKQuantityTypeIdentifierDistanceWalkingRunning",
+                        attributes.get("totalDistance") or None,
+                        attributes.get("totalDistanceUnit") or None,
+                        start,
+                        end,
+                    )
+                    energy_kcal = _workout_quantity(
+                        "HKQuantityTypeIdentifierActiveEnergyBurned",
+                        attributes.get("totalEnergyBurned") or None,
+                        attributes.get("totalEnergyBurnedUnit") or None,
+                        start,
+                        end,
+                    )
+                    duration_seconds = _duration_seconds(
+                        attributes.get("duration"), attributes.get("durationUnit")
+                    )
+                    if duration_seconds is None and start_time and end_time and end_time >= start_time:
+                        duration_seconds = (end_time - start_time).total_seconds()
                     cursor = connection.execute(
                         """
                         INSERT OR IGNORE INTO workouts(
                           fingerprint, activity_type, source_id, device_id, creation_date,
-                          start_date, end_date, duration, duration_unit, total_distance,
-                          total_distance_unit, total_energy, total_energy_unit
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          start_date, end_date, start_utc, end_utc, local_start_date,
+                          duration, duration_unit, duration_seconds, total_distance,
+                          total_distance_unit, total_distance_m, total_energy,
+                          total_energy_unit, total_energy_kcal
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             fingerprint,
@@ -629,12 +755,18 @@ def parse_export(
                             attributes.get("creationDate") or None,
                             start,
                             end,
+                            start_time.astimezone(UTC).isoformat().replace("+00:00", "Z") if start_time else None,
+                            end_time.astimezone(UTC).isoformat().replace("+00:00", "Z") if end_time else None,
+                            start_time.date().isoformat() if start_time else None,
                             attributes.get("duration") or None,
                             attributes.get("durationUnit") or None,
+                            duration_seconds,
                             attributes.get("totalDistance") or None,
                             attributes.get("totalDistanceUnit") or None,
+                            distance_m,
                             attributes.get("totalEnergyBurned") or None,
                             attributes.get("totalEnergyBurnedUnit") or None,
+                            energy_kcal,
                         ),
                     )
                     stored = bool(cursor.rowcount)
@@ -651,6 +783,7 @@ def parse_export(
                                     (workout_id, child_attrs["key"], child_attrs.get("value", "")),
                                 )
                             elif child_tag == "WorkoutStatistics":
+                                statistic_type = child_attrs.get("type", "Unknown")
                                 connection.execute(
                                     """
                                     INSERT INTO workout_statistics(
@@ -660,7 +793,7 @@ def parse_export(
                                     """,
                                     (
                                         workout_id,
-                                        child_attrs.get("type", "Unknown"),
+                                        statistic_type,
                                         child_attrs.get("startDate"),
                                         child_attrs.get("endDate"),
                                         child_attrs.get("average"),
@@ -670,6 +803,36 @@ def parse_export(
                                         child_attrs.get("unit"),
                                     ),
                                 )
+                                if statistic_type in {
+                                    "HKQuantityTypeIdentifierDistanceWalkingRunning",
+                                    "HKQuantityTypeIdentifierDistanceCycling",
+                                    "HKQuantityTypeIdentifierDistanceSwimming",
+                                }:
+                                    normalized_distance = _workout_quantity(
+                                        "HKQuantityTypeIdentifierDistanceWalkingRunning",
+                                        child_attrs.get("sum"),
+                                        child_attrs.get("unit"),
+                                        child_attrs.get("startDate") or start,
+                                        child_attrs.get("endDate") or end,
+                                    )
+                                    if normalized_distance is not None:
+                                        connection.execute(
+                                            "UPDATE workouts SET total_distance_m = COALESCE(total_distance_m, ?) WHERE id = ?",
+                                            (normalized_distance, workout_id),
+                                        )
+                                elif statistic_type == "HKQuantityTypeIdentifierActiveEnergyBurned":
+                                    normalized_energy = _workout_quantity(
+                                        statistic_type,
+                                        child_attrs.get("sum"),
+                                        child_attrs.get("unit"),
+                                        child_attrs.get("startDate") or start,
+                                        child_attrs.get("endDate") or end,
+                                    )
+                                    if normalized_energy is not None:
+                                        connection.execute(
+                                            "UPDATE workouts SET total_energy_kcal = COALESCE(total_energy_kcal, ?) WHERE id = ?",
+                                            (normalized_energy, workout_id),
+                                        )
                             elif child_tag == "WorkoutEvent":
                                 connection.execute(
                                     """
@@ -689,7 +852,7 @@ def parse_export(
                                     route_path = _bounded(reference.get("path"), "route path")
                                     if _tag(reference.tag) == "FileReference" and route_path:
                                         connection.execute(
-                                            "INSERT INTO workout_routes(workout_id, path) VALUES (?, ?)",
+                                            "INSERT OR IGNORE INTO workout_routes(workout_id, path) VALUES (?, ?)",
                                             (workout_id, route_path),
                                         )
                         workout_count += 1
@@ -769,6 +932,54 @@ def parse_export(
                 "INSERT OR IGNORE INTO file_inventory(path, kind, size_bytes) VALUES (?, ?, ?)",
                 (path, _file_kind(path), size),
             )
+        if asset_opener is not None:
+            progress(total_bytes, record_count + workout_count, "Parsing workout routes")
+            route_references = connection.execute(
+                "SELECT id, workout_id, path FROM workout_routes ORDER BY id"
+            ).fetchall()
+            for reference in route_references:
+                if cancelled():
+                    raise ImportCancelled()
+                try:
+                    with asset_opener(str(reference["path"])) as asset:
+                        parse_gpx_into(
+                            connection,
+                            int(reference["workout_id"]),
+                            str(reference["path"]),
+                            asset,
+                            cancelled,
+                        )
+                    route_count += 1
+                except AssetImportCancelled as error:
+                    raise ImportCancelled() from error
+                except (AssetParseError, SourceValidationError, OSError, KeyError) as error:
+                    add_issue(
+                        getattr(error, "code", "route_asset_error"),
+                        "WorkoutRoute",
+                        "GPX",
+                        "A linked workout route could not be imported.",
+                    )
+
+            progress(total_bytes, record_count + workout_count, "Parsing ECG recordings")
+            for asset_path, _size in source_files:
+                if _file_kind(asset_path) != "electrocardiogram":
+                    continue
+                if cancelled():
+                    raise ImportCancelled()
+                try:
+                    with asset_opener(asset_path) as asset:
+                        parse_ecg_into(connection, asset_path, asset, cancelled)
+                    ecg_count += 1
+                except AssetImportCancelled as error:
+                    raise ImportCancelled() from error
+                except (AssetParseError, SourceValidationError, OSError, KeyError) as error:
+                    add_issue(
+                        getattr(error, "code", "ecg_asset_error"),
+                        "Electrocardiogram",
+                        "ECG CSV",
+                        "An ECG CSV could not be imported.",
+                    )
+
         for (code, kind, identifier, message), count in issue_counts.items():
             connection.execute(
                 """
@@ -823,6 +1034,8 @@ def parse_export(
             source_fingerprint=fingerprint,
             type_count=len(inventory),
             source_count=len(source_cache),
+            route_count=route_count,
+            ecg_count=ecg_count,
         )
     except ET.ParseError as error:
         raise HealthParseError("malformed_xml", "The export.xml file is malformed or incomplete.") from error

@@ -53,12 +53,13 @@ Configured local paths are never copied or deleted by the app.
 - source-aware activity aggregates and visible overlap estimates;
 - measurement summaries and sleep sessions/stages;
 - blood glucose conversion and exported meal context without medical interpretation;
-- workouts, statistics, events, and route references;
+- normalized workouts, statistics, events, linked GPX route points, and route/elevation summaries;
+- ECG metadata and complete waveform samples from supported Apple CSV variants;
 - activity summaries;
 - supported child records from correlations plus inventory for correlation containers and unsupported top-level content; and
 - file inventory for GPX, ECG CSV, CDA, and other linked files.
 
-Snapshots created by version 0.2 require one complete re-import to build the Phase 3 normalized schema. The old active snapshot remains usable until that replacement succeeds.
+Snapshots created before version 0.3 require one complete re-import to build normalized metric aggregates. Snapshots created before version 0.5 require one complete re-import to parse GPX points and ECG waveforms. The old active snapshot remains usable until that transactional replacement succeeds. Activation keeps a recoverable prior snapshot until the new database and settings/import history are durably consistent; interrupted activation restores the prior snapshot on startup.
 
 ## Safety limits
 

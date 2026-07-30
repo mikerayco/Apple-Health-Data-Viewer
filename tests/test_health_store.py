@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import closing
+from io import BytesIO
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -33,6 +34,7 @@ class HealthStoreTests(unittest.TestCase):
                     source_files=opened.source_files,
                     progress=lambda read, items, phase: progress.append((read, items, phase)),
                     cancelled=lambda: False,
+                    asset_opener=opened.open_asset,
                 )
             quality = read_data_quality(database)
             with closing(sqlite3.connect(database)) as connection:
@@ -60,6 +62,8 @@ class HealthStoreTests(unittest.TestCase):
         self.assertEqual(result.workout_count, 1)
         self.assertEqual(result.duplicate_count, 1)
         self.assertEqual(result.warning_count, 0)
+        self.assertEqual(result.route_count, 1)
+        self.assertEqual(result.ecg_count, 1)
         self.assertEqual(result.export_version, "14")
         self.assertEqual(len(result.source_fingerprint), 64)
         self.assertTrue(progress)
@@ -75,7 +79,7 @@ class HealthStoreTests(unittest.TestCase):
         )
         self.assertIsNotNone(quality)
         self.assertEqual(quality["manifest"]["record_count"], 13)
-        self.assertEqual(quality["manifest"]["schema_version"], 2)
+        self.assertEqual(quality["manifest"]["schema_version"], 3)
         identifiers = {item["type_identifier"] for item in quality["inventory"]}
         self.assertIn("HKQuantityTypeIdentifierBloodGlucose", identifiers)
         glucose_inventory = next(
@@ -86,6 +90,28 @@ class HealthStoreTests(unittest.TestCase):
         file_kinds = {item["kind"]: item["count"] for item in quality["files"]}
         self.assertEqual(file_kinds["workout_route"], 1)
         self.assertEqual(file_kinds["electrocardiogram"], 1)
+
+    def test_nonfinite_workout_duration_falls_back_to_timestamps(self) -> None:
+        xml = b'''<?xml version="1.0"?>
+<HealthData locale="en_US"><ExportDate value="2024-01-02 12:00:00 +0000"/><Me/>
+<Workout workoutActivityType="HKWorkoutActivityTypeOther" sourceName="Synthetic"
+ duration="1e308" durationUnit="hr" startDate="2024-01-01 08:00:00 +0000"
+ endDate="2024-01-01 09:00:00 +0000"/></HealthData>'''
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "health.sqlite3"
+            parse_export(
+                BytesIO(xml),
+                database,
+                total_bytes=len(xml),
+                source_files=[],
+                progress=lambda *_: None,
+                cancelled=lambda: False,
+            )
+            with closing(sqlite3.connect(database)) as connection:
+                duration = connection.execute(
+                    "SELECT duration_seconds FROM workouts"
+                ).fetchone()[0]
+        self.assertEqual(duration, 3600.0)
 
     def test_malformed_xml_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 import os
 import shutil
 import stat
-from typing import BinaryIO, Iterable, Iterator
+from typing import BinaryIO, Callable, Iterable, Iterator
 import zipfile
 
 from werkzeug.datastructures import FileStorage
@@ -40,6 +40,7 @@ class OpenedExport:
     total_bytes: int
     source_files: list[tuple[str, int]]
     export_member: str
+    open_asset: Callable[[str], AbstractContextManager[BinaryIO]]
 
 
 def safe_relative_path(value: str) -> Path:
@@ -166,18 +167,63 @@ def open_export(spec: SourceSpec) -> Iterator[OpenedExport]:
         raise SourceValidationError("missing_source", "The configured source is no longer available.") from error
     if path.is_dir():
         export = locate_directory_export(path)
-        inventory_root = export.parent
+        inventory_root = export.parent.resolve(strict=True)
         files = directory_inventory(inventory_root)
+
+        @contextmanager
+        def open_directory_asset(name: str) -> Iterator[BinaryIO]:
+            relative = safe_relative_path(name)
+            candidate = inventory_root
+            for part in relative.parts:
+                candidate /= part
+                if candidate.is_symlink():
+                    raise SourceValidationError("asset_symlink", "Linked asset symbolic links are not accepted.")
+            target = candidate.resolve(strict=True)
+            try:
+                target.relative_to(inventory_root)
+            except ValueError as error:
+                raise SourceValidationError("unsafe_path", "A linked asset path is unsafe.") from error
+            if not target.is_file() or target.is_symlink():
+                raise SourceValidationError("missing_asset", "A linked export asset is unavailable.")
+            with target.open("rb") as asset:
+                yield asset
+
         with export.open("rb") as stream:
-            yield OpenedExport(stream, export.stat().st_size, files, export.name)
+            yield OpenedExport(
+                stream,
+                export.stat().st_size,
+                files,
+                export.name,
+                open_directory_asset,
+            )
         return
 
     if path.suffix.lower() != ".zip":
         raise SourceValidationError("unsupported_source", "Choose a ZIP archive or unzipped export folder.")
     export_member, files = inspect_zip(path)
     with zipfile.ZipFile(path) as archive, archive.open(export_member, "r") as stream:
+        root = PurePosixPath(export_member).parent
+        scoped: dict[str, tuple[str, int]] = {}
+        for member, size in files:
+            pure = PurePosixPath(member)
+            try:
+                relative = pure.relative_to(root) if root.parts else pure
+            except ValueError:
+                continue
+            scoped[relative.as_posix()] = (member, size)
+
+        @contextmanager
+        def open_zip_asset(name: str) -> Iterator[BinaryIO]:
+            relative = safe_relative_path(name).as_posix()
+            selected = scoped.get(relative)
+            if selected is None:
+                raise SourceValidationError("missing_asset", "A linked export asset is unavailable.")
+            with archive.open(selected[0], "r") as asset:
+                yield asset
+
         info = archive.getinfo(export_member)
-        yield OpenedExport(stream, info.file_size, files, export_member)
+        scoped_files = [(relative, item[1]) for relative, item in sorted(scoped.items())]
+        yield OpenedExport(stream, info.file_size, scoped_files, export_member, open_zip_asset)
 
 
 def _copy_stream(source: BinaryIO, destination: Path, maximum: int) -> int:

@@ -116,6 +116,7 @@ class GoldenAggregationTests(unittest.TestCase):
                 source_files=opened.source_files,
                 progress=lambda *_: None,
                 cancelled=lambda: False,
+                asset_opener=opened.open_asset,
             )
 
     def tearDown(self) -> None:

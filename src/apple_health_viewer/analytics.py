@@ -61,12 +61,21 @@ def open_health_database(path: Path) -> sqlite3.Connection:
 
 
 def _available_bounds(connection: sqlite3.Connection) -> tuple[date, date] | None:
+    schema = connection.execute("SELECT schema_version FROM manifest WHERE id = 1").fetchone()
+    phase_five = bool(schema and int(schema[0]) >= 3)
+    additions = (
+        " UNION ALL SELECT local_start_date AS day FROM workouts WHERE local_start_date IS NOT NULL"
+        " UNION ALL SELECT local_recorded_date AS day FROM ecgs WHERE local_recorded_date IS NOT NULL"
+        if phase_five
+        else ""
+    )
     row = connection.execute(
-        """
+        f"""
         SELECT MIN(day), MAX(day) FROM (
           SELECT local_date AS day FROM daily_metrics WHERE scope = 'combined'
           UNION ALL
           SELECT wake_date AS day FROM sleep_sessions
+          {additions}
         )
         """
     ).fetchone()

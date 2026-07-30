@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Workouts · Apple Health Data Viewer{% endblock %}
+{% block content %}
+<section class="page-head category-head">
+  <div><span class="eyebrow"><i></i> Sessions and routes</span><h1>Workouts</h1><p>Activity types, duration, distance, energy, and locally rendered route detail.</p></div>
+  {% include "_date_filter.html" %}
+</section>
+
+{% if dashboard %}
+<section class="workout-summary metric-strip" aria-label="Workout summary">
+  {% for label, value, note in (("Sessions", dashboard.summary.sessions, "selected period"), ("Total duration", dashboard.summary.total_duration or "—", "recorded workouts"), ("Average duration", dashboard.summary.average_duration or "—", "per session"), ("Distance", (dashboard.summary.total_distance ~ " " ~ dashboard.summary.distance_unit) if dashboard.summary.total_distance is not none else "—", "available totals"), ("Energy", (dashboard.summary.total_energy_kcal ~ " kcal") if dashboard.summary.total_energy_kcal is not none else "—", "available totals")) %}
+  <article><span>{{ "%02d" | format(loop.index) }}</span><h2>{{ label }}</h2><strong>{{ value }}</strong><small>{{ note }}</small></article>
+  {% endfor %}
+</section>
+
+<section class="filter-panel" aria-labelledby="workout-filter-title">
+  <div><span class="eyebrow"><i></i> Refine</span><h2 id="workout-filter-title">Find a session</h2></div>
+  <form method="get" class="detail-filters">
+    <input type="hidden" name="period" value="{{ selected_period }}">
+    <input type="hidden" name="start" value="{{ request.args.get('start', '') }}">
+    <input type="hidden" name="end" value="{{ request.args.get('end', '') }}">
+    <input type="hidden" name="granularity" value="{{ selected_granularity }}">
+    <label><span>Search</span><input type="search" name="q" value="{{ request.args.get('q', '') }}" maxlength="100" placeholder="Activity or source"></label>
+    <label><span>Activity</span><select name="type"><option value="">All types</option>{% for item in dashboard.filters.activity_types %}<option value="{{ item.identifier }}"{% if request.args.get('type') == item.identifier %} selected{% endif %}>{{ item.label }} ({{ item.count }})</option>{% endfor %}</select></label>
+    <label><span>Source</span><select name="source"><option value="">All sources</option>{% for item in dashboard.filters.sources %}<option value="{{ item.id }}"{% if request.args.get('source') == item.id|string %} selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+    <label><span>Device</span><select name="device"><option value="">All devices</option>{% for item in dashboard.filters.devices %}<option value="{{ item.id }}"{% if request.args.get('device') == item.id|string %} selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+    <label class="check-filter"><input type="checkbox" name="route" value="1"{% if request.args.get('route') == '1' %} checked{% endif %}><span>Route available</span></label>
+    <button type="submit" class="primary-button">Apply filters</button>
+  </form>
+</section>
+
+<section class="list-panel" aria-labelledby="workout-list-title">
+  <div class="chart-header"><div><span>{{ dashboard.pagination.total }} matching sessions</span><h2 id="workout-list-title">Workout history</h2></div><span class="coverage-pill">Page {{ dashboard.pagination.page }}{% if dashboard.pagination.pages %} of {{ dashboard.pagination.pages }}{% endif %}</span></div>
+  {% if dashboard["items"] %}
+  <div class="table-scroll"><table class="workout-table"><caption class="sr-only">Filtered workout sessions</caption><thead><tr><th>Date</th><th>Activity</th><th>Duration</th><th>Distance</th><th>Energy</th><th>Source</th><th>Route</th></tr></thead><tbody>
+    {% for item in dashboard["items"] %}<tr><td><a href="{{ url_for('web.workout', workout_id=item.id) }}">{{ item.local_date }}</a></td><td><strong>{{ item.label }}</strong></td><td>{{ item.duration or "Not exported" }}</td><td>{{ (item.distance ~ " " ~ item.distance_unit) if item.distance is not none else "—" }}</td><td>{{ (item.energy_kcal ~ " kcal") if item.energy_kcal is not none else "—" }}</td><td>{{ item.source }}{% if item.device %}<small>{{ item.device }}</small>{% endif %}</td><td>{{ "Available" if item.has_route else "—" }}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<div class="list-empty"><h3>No workouts match this selection.</h3><p>Try a longer date range or remove a filter. Missing sessions are never displayed as zero.</p></div>{% endif %}
+  {% if dashboard.pagination.pages > 1 %}<nav class="pagination" aria-label="Workout pages">
+    {% if dashboard.pagination.page > 1 %}<a href="{{ url_for('web.workouts', period=selected_period, start=request.args.get('start'), end=request.args.get('end'), granularity=selected_granularity, q=request.args.get('q'), type=request.args.get('type'), source=request.args.get('source'), device=request.args.get('device'), route=request.args.get('route'), page=dashboard.pagination.page - 1) }}">← Previous</a>{% endif %}
+    {% if dashboard.pagination.page < dashboard.pagination.pages %}<a href="{{ url_for('web.workouts', period=selected_period, start=request.args.get('start'), end=request.args.get('end'), granularity=selected_granularity, q=request.args.get('q'), type=request.args.get('type'), source=request.args.get('source'), device=request.args.get('device'), route=request.args.get('route'), page=dashboard.pagination.page + 1) }}">Next →</a>{% endif %}
+  </nav>{% endif %}
+</section>
+{% else %}
+<section class="empty-panel"><h2>{{ analytics_error.public_message if analytics_error else "Import workout data to begin" }}</h2><p>{% if analytics_error and analytics_error.code == 'reimport_required' %}The active snapshot predates Phase 5. Re-import once to parse linked routes and ECG files safely.{% else %}Workout sessions will appear after a complete Apple Health import.{% endif %}</p><a class="primary-button" href="{{ url_for('web.setup') }}">Open import setup</a></section>
+{% endif %}
+{% endblock %}

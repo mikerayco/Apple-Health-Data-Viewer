@@ -3,6 +3,8 @@ from __future__ import annotations
 from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
+import os
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -11,7 +13,15 @@ from urllib.parse import urlparse
 import zipfile
 
 from apple_health_viewer import create_app
-from apple_health_viewer.database import create_import, get_import, get_setting, managed_sources, recent_imports, update_import
+from apple_health_viewer.database import (
+    create_import,
+    get_import,
+    get_setting,
+    managed_sources,
+    recent_imports,
+    set_setting,
+    update_import,
+)
 from apple_health_viewer.health_store import ImportCancelled, read_data_quality
 from apple_health_viewer.import_manager import ImportBusyError
 from apple_health_viewer.sources import SourceSpec
@@ -73,6 +83,52 @@ class ImportManagerTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["error_code"], "malformed_xml")
         self.assertEqual(sha256(self.manager.active_database.read_bytes()).hexdigest(), before)
+
+    def test_activation_metadata_failure_restores_previous_database(self) -> None:
+        first = self.manager.start(SourceSpec("configured_path", FIXTURE, "Synthetic export"))
+        self.assertEqual(self.manager.wait(first.id, timeout=10)["status"], "succeeded")
+        before = sha256(self.manager.active_database.read_bytes()).hexdigest()
+
+        active_present_during_restore: list[bool] = []
+        real_replace = os.replace
+
+        def observed_replace(source, destination):
+            if Path(source) == self.manager.previous_database:
+                active_present_during_restore.append(self.manager.active_database.is_file())
+            return real_replace(source, destination)
+
+        with patch(
+            "apple_health_viewer.import_manager.complete_import_activation",
+            side_effect=sqlite3.OperationalError("synthetic settings failure"),
+        ), patch("apple_health_viewer.import_manager.os.replace", side_effect=observed_replace):
+            second = self.manager.start(
+                SourceSpec("configured_path", FIXTURE, "Synthetic replacement")
+            )
+            result = self.manager.wait(second.id, timeout=10)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(active_present_during_restore, [True])
+        self.assertEqual(sha256(self.manager.active_database.read_bytes()).hexdigest(), before)
+        self.assertFalse(self.manager.previous_database.exists())
+        self.assertIsNone(get_setting(self.app.config["SETTINGS_DATABASE"], "activation_pending"))
+
+    def test_interrupted_activation_is_recovered_on_startup(self) -> None:
+        self.manager.active_database.write_bytes(b"new-synthetic-snapshot")
+        self.manager.previous_database.write_bytes(b"previous-synthetic-snapshot")
+        set_setting(self.app.config["SETTINGS_DATABASE"], "activation_had_previous", "true")
+        set_setting(self.app.config["SETTINGS_DATABASE"], "activation_pending", "synthetic-job")
+
+        create_app(
+            {
+                "TESTING": True,
+                "DATA_DIR": self.data_dir,
+                "SECRET_KEY": "synthetic-test-secret",
+            }
+        )
+
+        self.assertEqual(self.manager.active_database.read_bytes(), b"previous-synthetic-snapshot")
+        self.assertFalse(self.manager.previous_database.exists())
+        self.assertIsNone(get_setting(self.app.config["SETTINGS_DATABASE"], "activation_pending"))
 
     def test_cancelled_import_preserves_previous_database(self) -> None:
         self.manager.active_database.write_bytes(b"previous-synthetic-database")
@@ -212,6 +268,21 @@ class ImportRouteTests(unittest.TestCase):
         sleep_trend = self.client.get("/api/sleep/trend?period=all")
         self.assertEqual(sleep_trend.status_code, 200)
         self.assertEqual(sleep_trend.json["trend"][0]["asleep_hours"], 7.0)
+        workouts = self.client.get("/api/workouts?period=all")
+        self.assertEqual(workouts.status_code, 200)
+        self.assertEqual(workouts.json["summary"]["sessions"], 1)
+        self.assertTrue(workouts.json["items"][0]["has_route"])
+        workout = self.client.get("/api/workouts/1")
+        self.assertEqual(workout.json["label"], "Running")
+        route = self.client.get("/api/workouts/1/route?limit=2")
+        self.assertEqual(route.json["original_point_count"], 3)
+        self.assertEqual(route.json["returned_point_count"], 2)
+        ecgs = self.client.get("/api/ecgs?period=all")
+        self.assertEqual(ecgs.status_code, 200)
+        self.assertEqual(ecgs.json["pagination"]["total"], 1)
+        ecg = self.client.get("/api/ecgs/1")
+        self.assertEqual(ecg.json["classification"], "Sinus Rhythm")
+        self.assertEqual(len(ecg.json["samples"]), 4)
         preference = self.client.post(
             "/settings/preferences",
             data={"csrf_token": self.token(), "theme": "system", "unit_system": "imperial"},
@@ -223,6 +294,13 @@ class ImportRouteTests(unittest.TestCase):
         self.assertIn(b"Blood glucose", self.client.get("/heart?period=all").data)
         self.assertIn(b"7.0 hr", self.client.get("/sleep?period=all").data)
         self.assertIn(b"154.3 lb", self.client.get("/body?period=all").data)
+        self.assertIn(b"Running", self.client.get("/workouts?period=all").data)
+        self.assertIn(b"Tile-free route", self.client.get("/workouts/1").data)
+        self.assertIn(b"Sinus Rhythm", self.client.get("/ecgs?period=all").data)
+        self.assertIn(b"Lead I trace", self.client.get("/ecgs/1").data)
+        with sqlite3.connect(self.manager.active_database) as connection:
+            connection.execute("UPDATE ecgs SET lead = 'Lead II' WHERE id = 1")
+        self.assertIn(b"Lead II trace", self.client.get("/ecgs/1").data)
         dashboard = self.client.get("/overview?period=all")
         self.assertIn(b"1,500 steps", dashboard.data)
         self.assertIn(b"data-trend-chart", dashboard.data)

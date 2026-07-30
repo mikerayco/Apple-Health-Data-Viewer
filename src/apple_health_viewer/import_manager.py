@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import threading
 from typing import Any
 import uuid
@@ -14,8 +15,11 @@ import uuid
 from flask import Flask
 
 from .database import (
+    complete_import_activation,
     create_import,
+    delete_setting,
     get_import,
+    get_setting,
     recover_interrupted_imports,
     set_setting,
     update_import,
@@ -69,6 +73,8 @@ class ImportJob:
                     "export_date": result.export_date,
                     "type_count": result.type_count,
                     "source_count": result.source_count,
+                    "route_count": result.route_count,
+                    "ecg_count": result.ecg_count,
                 }
                 if result
                 else None,
@@ -89,13 +95,28 @@ class ImportManager:
         self.staging_dir = self.imports_dir / "staging"
         self.sources_dir = self.imports_dir / "sources"
         self.active_database = self.data_dir / "health.sqlite3"
+        self.previous_database = self.data_dir / "health.sqlite3.previous"
         self.staging_dir.mkdir(parents=True, exist_ok=True)
         self.sources_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._jobs: dict[str, ImportJob] = {}
         self._active_job: str | None = None
+        self._recover_interrupted_activation()
         recover_interrupted_imports(self.settings_database)
         self._clean_stale_staging()
+
+    def _recover_interrupted_activation(self) -> None:
+        pending = get_setting(self.settings_database, "activation_pending")
+        had_previous = get_setting(self.settings_database, "activation_had_previous") == "true"
+        if pending:
+            if self.previous_database.is_file():
+                os.replace(self.previous_database, self.active_database)
+            elif not had_previous and self.active_database.is_file():
+                self.active_database.unlink()
+            delete_setting(self.settings_database, "activation_pending")
+            delete_setting(self.settings_database, "activation_had_previous")
+        elif self.previous_database.is_file():
+            self.previous_database.unlink()
 
     def _clean_stale_staging(self) -> None:
         for child in self.staging_dir.iterdir():
@@ -171,6 +192,8 @@ class ImportManager:
                 "export_date": stored.get("export_date"),
                 "type_count": 0,
                 "source_count": 0,
+                "route_count": 0,
+                "ecg_count": 0,
             }
             if stored["status"] == "succeeded"
             else None,
@@ -209,7 +232,17 @@ class ImportManager:
             with open_export(job.source) as opened:
                 job.update(total_bytes=opened.total_bytes, phase="Checking available disk space")
                 free, _total = disk_usage(self.data_dir)
-                required = int(opened.total_bytes * 1.5) + 128 * 1024**2
+                linked_bytes = sum(
+                    size
+                    for name, size in opened.source_files
+                    if name.lower().endswith((".gpx", ".csv"))
+                )
+                active_bytes = self.active_database.stat().st_size if self.active_database.is_file() else 0
+                required = (
+                    int(opened.total_bytes * 1.5 + linked_bytes * 2)
+                    + active_bytes
+                    + 128 * 1024**2
+                )
                 if free < required:
                     raise SourceValidationError(
                         "insufficient_disk",
@@ -222,6 +255,7 @@ class ImportManager:
                     source_files=opened.source_files,
                     progress=lambda read, items, phase: self._progress(job, read, items, phase),
                     cancelled=job.cancel_event.is_set,
+                    asset_opener=opened.open_asset,
                 )
 
             if job.cancel_event.is_set():
@@ -229,28 +263,56 @@ class ImportManager:
             job.update(phase="Activating imported snapshot", progress=0.99)
             with staged_database.open("rb") as database_file:
                 os.fsync(database_file.fileno())
-            os.replace(staged_database, self.active_database)
-            database_bytes = self.active_database.stat().st_size
-            set_setting(self.settings_database, "setup_complete", "true")
-            set_setting(self.settings_database, "active_source_label", job.source.label)
-            if job.source.managed_id:
-                set_setting(self.settings_database, "active_managed_source_id", job.source.managed_id)
-            else:
-                set_setting(self.settings_database, "active_managed_source_id", "")
-            finished = _now()
-            update_import(
+            had_previous = self.active_database.is_file()
+            if had_previous:
+                try:
+                    os.link(self.active_database, self.previous_database)
+                except OSError:
+                    shutil.copy2(self.active_database, self.previous_database)
+                    with self.previous_database.open("rb") as previous_file:
+                        os.fsync(previous_file.fileno())
+                _fsync_directory(self.data_dir)
+            set_setting(
                 self.settings_database,
-                job.id,
-                status="succeeded",
-                finished_at=finished,
-                record_count=result.record_count,
-                workout_count=result.workout_count,
-                duplicate_count=result.duplicate_count,
-                warning_count=result.warning_count,
-                health_database_bytes=database_bytes,
-                export_date=result.export_date,
-                error_code=None,
+                "activation_had_previous",
+                "true" if had_previous else "false",
             )
+            set_setting(self.settings_database, "activation_pending", job.id)
+            try:
+                os.replace(staged_database, self.active_database)
+                _fsync_directory(self.data_dir)
+                database_bytes = self.active_database.stat().st_size
+                complete_import_activation(
+                    self.settings_database,
+                    job.id,
+                    source_label=job.source.label,
+                    managed_source_id=job.source.managed_id,
+                    finished_at=_now(),
+                    record_count=result.record_count,
+                    workout_count=result.workout_count,
+                    duplicate_count=result.duplicate_count,
+                    warning_count=result.warning_count,
+                    health_database_bytes=database_bytes,
+                    export_date=result.export_date,
+                )
+            except Exception:
+                if self.previous_database.is_file():
+                    os.replace(self.previous_database, self.active_database)
+                elif self.active_database.is_file():
+                    self.active_database.unlink()
+                _fsync_directory(self.data_dir)
+                try:
+                    delete_setting(self.settings_database, "activation_pending")
+                    delete_setting(self.settings_database, "activation_had_previous")
+                except sqlite3.Error:
+                    pass
+                raise
+            if self.previous_database.is_file():
+                try:
+                    self.previous_database.unlink()
+                    _fsync_directory(self.data_dir)
+                except OSError:
+                    pass
             job.update(status="succeeded", phase="Import complete", progress=1.0, result=result)
         except ImportCancelled:
             update_import(
@@ -300,6 +362,19 @@ class ImportManager:
             with self._lock:
                 if self._active_job == job.id:
                     self._active_job = None
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
 
 
 def _now() -> str:

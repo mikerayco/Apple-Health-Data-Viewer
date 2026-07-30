@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{{ workout.label if workout else "Workout" }} · Apple Health Data Viewer{% endblock %}
+{% block content %}
+{% if workout %}
+<section class="page-head detail-head"><div><a class="back-link" href="{{ url_for('web.workouts') }}">← All workouts</a><span class="eyebrow"><i></i> Workout detail</span><h1>{{ workout.label }}</h1><p>{{ workout.start_date }} · {{ workout.source }}{% if workout.device %} · {{ workout.device }}{% endif %}</p></div></section>
+
+<section class="detail-summary metric-strip" aria-label="Workout totals">
+  {% for label, value, note in (("Duration", workout.duration or "Not exported", "session length"), ("Distance", (workout.distance ~ " " ~ workout.distance_unit) if workout.distance is not none else "Not exported", "workout total"), ("Energy", (workout.energy_kcal ~ " kcal") if workout.energy_kcal is not none else "Not exported", "workout total"), ("Route", (workout.route.point_count ~ " points") if workout.route.available else "Not available", "offline detail")) %}<article><span>{{ "%02d" | format(loop.index) }}</span><h2>{{ label }}</h2><strong>{{ value }}</strong><small>{{ note }}</small></article>{% endfor %}
+</section>
+
+{% if workout.route.available %}
+<section class="route-panel" data-route-view data-route-url="{{ url_for('web.workout_route_api', workout_id=workout.id) }}">
+  <div class="chart-header"><div><span>Tile-free route</span><h2>Path and elevation</h2></div><span class="coverage-pill">{{ workout.route.point_count }} original points</span></div>
+  <div class="route-grid">
+    <div class="route-plot"><div class="chart-state" data-route-status role="status">Loading route…</div><svg data-route-svg hidden role="img"></svg></div>
+    <div class="elevation-plot"><p class="chart-state" data-elevation-status role="status">Loading elevation…</p><svg data-elevation-svg hidden role="img"></svg></div>
+  </div>
+  <div class="route-legend" aria-label="Route marker legend"><span><i class="legend-start" aria-hidden="true"></i>Start</span><span><i class="legend-end" aria-hidden="true"></i>End</span></div>
+  <p class="chart-text-summary" data-route-summary></p>
+  <noscript><p class="chart-noscript">The interactive route requires JavaScript. Distance and elevation totals remain available below.</p></noscript>
+  <dl class="route-stats"><div><dt>Route distance</dt><dd>{{ workout.route.distance }} {{ workout.route.distance_unit }}</dd></div><div><dt>Elevation gain</dt><dd>{{ (workout.route.elevation_gain_m ~ " m") if workout.route.elevation_gain_m is not none else "Not exported" }}</dd></div><div><dt>Elevation loss</dt><dd>{{ (workout.route.elevation_loss_m ~ " m") if workout.route.elevation_loss_m is not none else "Not exported" }}</dd></div></dl>
+  <p class="method-copy">The route is rendered entirely offline without geographic map tiles. Coordinates remain in the local database and are returned only to this loopback page.</p>
+</section>
+{% endif %}
+
+<section class="detail-columns">
+  <article class="list-panel"><div class="chart-header"><div><span>Exported values</span><h2>Statistics</h2></div></div>{% if workout.statistics %}<div class="table-scroll"><table><thead><tr><th>Identifier</th><th>Average</th><th>Minimum</th><th>Maximum</th><th>Sum</th><th>Unit</th></tr></thead><tbody>{% for item in workout.statistics %}<tr><td><code>{{ item.type_identifier }}</code></td><td>{{ item.average or "—" }}</td><td>{{ item.minimum or "—" }}</td><td>{{ item.maximum or "—" }}</td><td>{{ item.sum_value or "—" }}</td><td>{{ item.unit or "—" }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="method-copy">No workout statistics were exported for this session.</p>{% endif %}</article>
+  <article class="list-panel"><div class="chart-header"><div><span>Provenance</span><h2>Raw identity</h2></div></div><dl class="detail-list"><div><dt>Apple identifier</dt><dd><code>{{ workout.raw_identifier }}</code></dd></div><div><dt>Start</dt><dd>{{ workout.start_date }}</dd></div><div><dt>End</dt><dd>{{ workout.end_date }}</dd></div><div><dt>Source</dt><dd>{{ workout.source }}</dd></div></dl></article>
+</section>
+{% if workout.events or workout.metadata %}<section class="detail-columns">{% if workout.events %}<article class="list-panel"><div class="chart-header"><div><span>Timeline</span><h2>Workout events</h2></div></div><div class="table-scroll"><table><thead><tr><th>Event</th><th>Date</th><th>Duration</th></tr></thead><tbody>{% for item in workout.events %}<tr><td>{{ item.event_type }}</td><td>{{ item.event_date }}</td><td>{{ item.duration or "—" }} {{ item.duration_unit or "" }}</td></tr>{% endfor %}</tbody></table></div></article>{% endif %}{% if workout.metadata %}<article class="list-panel"><div class="chart-header"><div><span>Exported context</span><h2>Metadata</h2></div></div><dl class="detail-list">{% for item in workout.metadata %}<div><dt>{{ item.key }}</dt><dd>{{ item.value }}</dd></div>{% endfor %}</dl></article>{% endif %}</section>{% endif %}
+{% else %}
+<section class="empty-panel"><h2>{{ analytics_error.public_message if analytics_error else "Workout unavailable" }}</h2><p>Re-import the source if this snapshot predates Phase 5.</p><a class="primary-button" href="{{ url_for('web.setup') }}">Open import setup</a></section>
+{% endif %}
+{% endblock %}

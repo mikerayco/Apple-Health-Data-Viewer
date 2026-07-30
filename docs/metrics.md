@@ -98,9 +98,17 @@ Insights are deterministic and are withheld when their coverage gate is not met:
 
 Each insight reports its date window, sample count, coverage, comparison basis, and method. Language is deliberately neutral. Missing days are excluded rather than converted to zero. Personal daily highs and lows are withheld until day-completeness semantics can distinguish a complete day from a partially recorded day.
 
+## Workouts, routes, and ECGs
+
+Workout duration is normalized to seconds, distance to metres, and energy to kilocalories while original attributes and Apple identifiers remain available. Unknown activity identifiers receive a readable fallback label without being discarded. Lists can be filtered by date, activity type, source, device, and route availability.
+
+Linked GPX routes are parsed as bounded streams. Every valid original point and GPX track-segment boundary remains in SQLite; distance and elevation are never bridged across segments. API responses return at most 5,000 shape-preserving spatial-extrema points for rendering. Distance uses the haversine formula between consecutive coordinates. Elevation gain and loss sum consecutive positive and negative elevation changes without applying smoothing; when elevation pairs are absent, the result is unknown rather than zero. Routes are rendered without geographic map tiles or network requests.
+
+ECG CSV metadata and waveform samples are parsed defensively with bounded rows, columns, preambles, and sample counts. Recording timestamps retain a validated local calendar date for filtering and UTC timestamp for ordering. Apple's classification wording is preserved exactly. Waveform APIs use extrema-preserving deterministic limits while retaining the complete imported recording. Only an explicit safe metadata allowlist is returned; profile identity and date-of-birth variants are never exposed by ECG endpoints. The app produces no independent rhythm interpretation.
+
 ## Current limits
 
 - Combined activity is an explainable estimate and may differ from Apple Health totals.
 - Source/device filters apply to metric endpoints; sleep is currently combined through interval union.
-- Workout-frequency insights wait for Phase 5 workout normalization.
-- Workouts, route details, and ECG visualization are Phase 5 work.
+- Workout-to-ECG association is shown only when a future export format supplies an explicit stable link; proximity is not treated as proof of association.
+- Route distance and elevation can differ from Apple's display because exported points do not include Apple's private smoothing behavior.

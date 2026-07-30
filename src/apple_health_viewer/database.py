@@ -132,6 +132,59 @@ def update_import(path: str | Path, job_id: str, **values: object) -> None:
         )
 
 
+def complete_import_activation(
+    path: str | Path,
+    job_id: str,
+    *,
+    source_label: str,
+    managed_source_id: str | None,
+    finished_at: str,
+    record_count: int,
+    workout_count: int,
+    duplicate_count: int,
+    warning_count: int,
+    health_database_bytes: int,
+    export_date: str | None,
+) -> None:
+    settings = {
+        "setup_complete": "true",
+        "active_source_label": source_label,
+        "active_managed_source_id": managed_source_id or "",
+    }
+    with closing(connect(path)) as connection, connection:
+        connection.executemany(
+            """
+            INSERT INTO settings(key, value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+              value = excluded.value,
+              updated_at = CURRENT_TIMESTAMP
+            """,
+            settings.items(),
+        )
+        connection.execute(
+            "DELETE FROM settings WHERE key IN ('activation_pending', 'activation_had_previous')"
+        )
+        connection.execute(
+            """
+            UPDATE import_history SET status = 'succeeded', finished_at = ?,
+              record_count = ?, workout_count = ?, duplicate_count = ?, warning_count = ?,
+              health_database_bytes = ?, export_date = ?, error_code = NULL
+            WHERE job_id = ?
+            """,
+            (
+                finished_at,
+                record_count,
+                workout_count,
+                duplicate_count,
+                warning_count,
+                health_database_bytes,
+                export_date,
+                job_id,
+            ),
+        )
+
+
 def get_import(path: str | Path, job_id: str) -> dict[str, object] | None:
     with closing(connect(path)) as connection:
         row = connection.execute(
