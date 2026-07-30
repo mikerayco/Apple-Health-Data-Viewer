@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
+import math
 from pathlib import Path
 import sqlite3
 from typing import Iterable
@@ -247,6 +248,99 @@ def _decimate(points: list[dict[str, object]], limit: int = 240) -> list[dict[st
     return [point for index, point in enumerate(points) if index in indexes]
 
 
+def _decimate_trend(points: list[dict[str, object]], limit: int = 240) -> list[dict[str, object]]:
+    if len(points) <= limit:
+        return points
+    indexes = sorted({round(index * (len(points) - 1) / (limit - 1)) for index in range(limit)})
+    result: list[dict[str, object]] = []
+    previous = -1
+    for index in indexes:
+        point = dict(points[index])
+        point["gap_before"] = bool(result) and any(
+            bool(item.get("gap_before")) for item in points[previous + 1 : index + 1]
+        )
+        result.append(point)
+        previous = index
+    return result
+
+
+def resolve_granularity(window: DateWindow, requested: str | None = None) -> str:
+    value = requested or "auto"
+    if value not in {"auto", "day", "week", "month"}:
+        raise AnalyticsError("invalid_granularity", "Choose day, week, month, or automatic chart grouping.")
+    if value != "auto":
+        return value
+    if window.days <= 90:
+        return "day"
+    if window.days <= 730:
+        return "week"
+    return "month"
+
+
+def _bucket_key(value: str, granularity: str) -> str:
+    current = date.fromisoformat(value)
+    if granularity == "week":
+        return (current - timedelta(days=current.weekday())).isoformat()
+    if granularity == "month":
+        return current.replace(day=1).isoformat()
+    return current.isoformat()
+
+
+def _next_bucket(bucket: str, granularity: str) -> str:
+    start = date.fromisoformat(bucket)
+    if granularity == "week":
+        return (start + timedelta(days=7)).isoformat()
+    if granularity == "month":
+        return (start.replace(year=start.year + 1, month=1) if start.month == 12 else start.replace(month=start.month + 1)).isoformat()
+    return (start + timedelta(days=1)).isoformat()
+
+
+def _bucket_end(bucket: str, granularity: str) -> str:
+    start = date.fromisoformat(bucket)
+    if granularity == "week":
+        return (start + timedelta(days=6)).isoformat()
+    if granularity == "month":
+        next_month = start.replace(year=start.year + 1, month=1) if start.month == 12 else start.replace(month=start.month + 1)
+        return (next_month - timedelta(days=1)).isoformat()
+    return bucket
+
+
+def _trend_points(
+    definition: MetricDefinition,
+    rows: list[sqlite3.Row],
+    unit_system: str,
+    granularity: str,
+) -> list[dict[str, object]]:
+    buckets: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        buckets.setdefault(_bucket_key(str(row["local_date"]), granularity), []).append(row)
+    points: list[dict[str, object]] = []
+    previous_bucket: str | None = None
+    for bucket, bucket_rows in buckets.items():
+        samples = sum(int(row["sample_count"]) for row in bucket_rows)
+        if definition.kind == "cumulative":
+            canonical = sum(float(row["value_sum"] or 0) for row in bucket_rows)
+        else:
+            canonical = sum(
+                float(row["value_mean"] or 0) * int(row["sample_count"])
+                for row in bucket_rows
+            ) / samples
+        points.append(
+            {
+                "date": bucket,
+                "end_date": _bucket_end(bucket, granularity),
+                "observed_start": str(bucket_rows[0]["local_date"]),
+                "observed_end": str(bucket_rows[-1]["local_date"]),
+                "gap_before": previous_bucket is not None and bucket != _next_bucket(previous_bucket, granularity),
+                "value": _display_number(definition, canonical, unit_system),
+                "samples": samples,
+                "estimated": any(bool(row["is_estimate"]) for row in bucket_rows),
+            }
+        )
+        previous_bucket = bucket
+    return _decimate_trend(points)
+
+
 def _comparison(current: float, prior: float | None) -> dict[str, float | None]:
     if prior is None:
         return {"absolute": None, "percent": None}
@@ -298,6 +392,7 @@ def metric_summary(
     source_id: int | None = None,
     device_id: int | None = None,
     include_filters: bool = True,
+    granularity: str | None = None,
 ) -> dict[str, object]:
     definition = METRICS.get(metric_key)
     if not definition:
@@ -307,6 +402,7 @@ def metric_summary(
     current = _aggregate_rows(definition, rows)
     prior_rows = _daily_rows(connection, metric_key, window.prior_start, window.prior_end, scope, source_key)
     prior = _aggregate_rows(definition, prior_rows)
+    chart_granularity = resolve_granularity(window, granularity)
     unit = definition.metric_unit if unit_system == "metric" else definition.imperial_unit
     payload: dict[str, object] = {
         "key": metric_key,
@@ -318,6 +414,7 @@ def metric_summary(
         "window": window.as_dict(),
         "scope": scope,
         "source_key": source_key,
+        "granularity": chart_granularity,
     }
     if include_filters:
         payload["filters"] = _metric_filters(connection, metric_key)
@@ -368,23 +465,12 @@ def metric_summary(
                 "absolute": _display_number(definition, comparison["absolute"], unit_system),
                 "percent": round(comparison["percent"], 1) if comparison["percent"] is not None else None,
                 "prior_value": _display_number(definition, prior_value, unit_system),
+                "prior_tracked_days": int(prior["tracked_days"]) if prior else 0,
+                "prior_sample_count": int(prior["sample_count"]) if prior else 0,
+                "prior_coverage_percent": round(int(prior["tracked_days"]) / window.days * 100, 1) if prior else 0.0,
                 "basis": f"{window.prior_start.isoformat()} to {window.prior_end.isoformat()}",
             },
-            "trend": _decimate(
-                [
-                    {
-                        "date": str(row["local_date"]),
-                        "value": _display_number(
-                            definition,
-                            float(row["value_sum"] if definition.kind == "cumulative" else row["value_mean"]),
-                            unit_system,
-                        ),
-                        "samples": int(row["sample_count"]),
-                        "estimated": bool(row["is_estimate"]),
-                    }
-                    for row in rows
-                ]
-            ),
+            "trend": _trend_points(definition, rows, unit_system, chart_granularity),
             "method": (
                 "Maximum active interval rate across overlapping cumulative samples; non-overlapping intervals are combined."
                 if definition.kind == "cumulative" and scope == "combined"
@@ -400,6 +486,35 @@ def metric_summary(
         payload["readings"] = _glucose_readings(connection, window, unit_system, scope, source_key)
         payload["readings_limited"] = int(payload["sample_count"]) > len(payload["readings"])
     return payload
+
+
+def metric_trend_summary(
+    connection: sqlite3.Connection,
+    metric_key: str,
+    window: DateWindow,
+    unit_system: str,
+    *,
+    source_id: int | None = None,
+    device_id: int | None = None,
+    granularity: str | None = None,
+) -> dict[str, object]:
+    definition = METRICS.get(metric_key)
+    if not definition:
+        raise AnalyticsError("unknown_metric", "That metric is not supported.")
+    scope, source_key = _filter_scope(source_id, device_id)
+    rows = _daily_rows(connection, metric_key, window.start, window.end, scope, source_key)
+    chart_granularity = resolve_granularity(window, granularity)
+    return {
+        "key": metric_key,
+        "label": definition.label,
+        "unit": definition.metric_unit if unit_system == "metric" else definition.imperial_unit,
+        "available": bool(rows),
+        "window": window.as_dict(),
+        "granularity": chart_granularity,
+        "scope": scope,
+        "source_key": source_key,
+        "trend": _trend_points(definition, rows, unit_system, chart_granularity),
+    }
 
 
 def _glucose_readings(
@@ -465,7 +580,70 @@ def _latest_meal_context(
     return {"1": "Before meal", "2": "After meal"}.get(str(row[0]), "Meal context recorded")
 
 
-def sleep_summary(connection: sqlite3.Connection, window: DateWindow) -> dict[str, object]:
+def _sleep_trend(rows: list[sqlite3.Row], granularity: str) -> list[dict[str, object]]:
+    daily: dict[str, dict[str, object]] = {}
+    for row in rows:
+        key = str(row["wake_date"])
+        item = daily.setdefault(
+            key,
+            {
+                "asleep": 0.0,
+                "in_bed": 0.0,
+                "sessions": 0,
+                "in_bed_only": False,
+                "measured": False,
+                "in_bed_measured": False,
+            },
+        )
+        item["asleep"] = float(item["asleep"]) + float(row["asleep_seconds"])
+        item["in_bed"] = float(item["in_bed"]) + float(row["in_bed_seconds"])
+        item["sessions"] = int(item["sessions"]) + 1
+        item["in_bed_only"] = bool(item["in_bed_only"]) or bool(row["in_bed_only"])
+        item["measured"] = bool(item["measured"]) or float(row["asleep_seconds"]) > 0
+        item["in_bed_measured"] = bool(item["in_bed_measured"]) or float(row["in_bed_seconds"]) > 0
+    buckets: dict[str, list[tuple[str, dict[str, object]]]] = {}
+    for day, item in daily.items():
+        buckets.setdefault(_bucket_key(day, granularity), []).append((day, item))
+    points: list[dict[str, object]] = []
+    previous_bucket: str | None = None
+    for bucket, items in buckets.items():
+        nights = len(items)
+        measured = [item for item in items if bool(item[1]["measured"])]
+        in_bed_measured = [item for item in items if bool(item[1]["in_bed_measured"])]
+        points.append(
+            {
+                "date": bucket,
+                "end_date": _bucket_end(bucket, granularity),
+                "observed_start": items[0][0],
+                "observed_end": items[-1][0],
+                "gap_before": previous_bucket is not None and bucket != _next_bucket(previous_bucket, granularity),
+                "asleep_hours": round(sum(float(item[1]["asleep"]) for item in measured) / len(measured) / 3600, 2) if measured else None,
+                "in_bed_hours": (
+                    round(
+                        sum(float(item[1]["in_bed"]) for item in in_bed_measured)
+                        / len(in_bed_measured)
+                        / 3600,
+                        2,
+                    )
+                    if in_bed_measured
+                    else None
+                ),
+                "nights": nights,
+                "measured_nights": len(measured),
+                "in_bed_nights": len(in_bed_measured),
+                "sessions": sum(int(item[1]["sessions"]) for item in items),
+                "in_bed_only": any(bool(item[1]["in_bed_only"]) for item in items),
+            }
+        )
+        previous_bucket = bucket
+    return _decimate_trend(points)
+
+
+def sleep_summary(
+    connection: sqlite3.Connection,
+    window: DateWindow,
+    granularity: str | None = None,
+) -> dict[str, object]:
     rows = connection.execute(
         "SELECT * FROM sleep_sessions WHERE wake_date BETWEEN ? AND ? ORDER BY wake_date",
         (window.start.isoformat(), window.end.isoformat()),
@@ -474,25 +652,40 @@ def sleep_summary(connection: sqlite3.Connection, window: DateWindow) -> dict[st
         "SELECT * FROM sleep_sessions WHERE wake_date BETWEEN ? AND ?",
         (window.prior_start.isoformat(), window.prior_end.isoformat()),
     ).fetchall()
+    chart_granularity = resolve_granularity(window, granularity)
     if not rows:
-        return {"available": False, "reason": "no_records_in_range", "window": window.as_dict(), "trend": []}
+        return {
+            "available": False,
+            "reason": "no_records_in_range",
+            "window": window.as_dict(),
+            "granularity": chart_granularity,
+            "trend": [],
+        }
     asleep = sum(float(row["asleep_seconds"]) for row in rows)
     in_bed = sum(float(row["in_bed_seconds"]) for row in rows)
     awake = sum(float(row["awake_seconds"]) for row in rows)
     logged_nights = len({str(row["wake_date"]) for row in rows})
+    measured_nights = len({str(row["wake_date"]) for row in rows if float(row["asleep_seconds"]) > 0})
+    in_bed_nights = len({str(row["wake_date"]) for row in rows if float(row["in_bed_seconds"]) > 0})
+    prior_logged_nights = len({str(row["wake_date"]) for row in prior})
+    prior_measured_nights = len({str(row["wake_date"]) for row in prior if float(row["asleep_seconds"]) > 0})
     prior_asleep = sum(float(row["asleep_seconds"]) for row in prior) if prior else None
-    current_average = asleep / len(rows)
-    prior_average = prior_asleep / len(prior) if prior else None
-    comparison = _comparison(current_average, prior_average)
+    current_average = asleep / measured_nights if measured_nights else None
+    prior_average = prior_asleep / prior_measured_nights if prior_asleep is not None and prior_measured_nights else None
+    comparison = _comparison(current_average, prior_average) if current_average is not None else {"absolute": None, "percent": None}
     return {
         "available": True,
         "window": window.as_dict(),
         "sessions": len(rows),
         "logged_nights": logged_nights,
+        "measured_nights": measured_nights,
         "coverage_percent": round(logged_nights / window.days * 100, 1),
-        "average_asleep_hours": round(current_average / 3600, 2),
+        "asleep_coverage_percent": round(measured_nights / window.days * 100, 1),
+        "in_bed_nights": in_bed_nights,
+        "in_bed_coverage_percent": round(in_bed_nights / window.days * 100, 1),
+        "average_asleep_hours": round(current_average / 3600, 2) if current_average is not None else None,
         "total_asleep_hours": round(asleep / 3600, 2),
-        "total_in_bed_hours": round(in_bed / 3600, 2),
+        "total_in_bed_hours": round(in_bed / 3600, 2) if in_bed_nights else None,
         "total_awake_hours": round(awake / 3600, 2),
         "stage_hours": {
             "core": round(sum(float(row["core_seconds"]) for row in rows) / 3600, 2),
@@ -504,20 +697,35 @@ def sleep_summary(connection: sqlite3.Connection, window: DateWindow) -> dict[st
         "comparison": {
             "absolute_hours": round(float(comparison["absolute"]) / 3600, 2) if comparison["absolute"] is not None else None,
             "percent": round(float(comparison["percent"]), 1) if comparison["percent"] is not None else None,
+            "prior_logged_nights": prior_logged_nights,
+            "prior_measured_nights": prior_measured_nights,
+            "prior_coverage_percent": round(prior_logged_nights / window.days * 100, 1),
             "basis": f"{window.prior_start.isoformat()} to {window.prior_end.isoformat()}",
         },
-        "trend": _decimate(
-            [
-                {
-                    "date": str(row["wake_date"]),
-                    "asleep_hours": round(float(row["asleep_seconds"]) / 3600, 2),
-                    "in_bed_hours": round(float(row["in_bed_seconds"]) / 3600, 2),
-                    "in_bed_only": bool(row["in_bed_only"]),
-                }
-                for row in rows
-            ]
-        ),
+        "granularity": chart_granularity,
+        "trend": _sleep_trend(rows, chart_granularity),
         "method": "Overlapping sleep intervals are unioned; staged sleep is kept separate from In Bed and assigned to the wake-up day.",
+    }
+
+
+def sleep_trend_summary(
+    connection: sqlite3.Connection,
+    window: DateWindow,
+    granularity: str | None = None,
+) -> dict[str, object]:
+    rows = connection.execute(
+        """
+        SELECT wake_date, asleep_seconds, in_bed_seconds, in_bed_only
+        FROM sleep_sessions WHERE wake_date BETWEEN ? AND ? ORDER BY wake_date
+        """,
+        (window.start.isoformat(), window.end.isoformat()),
+    ).fetchall()
+    chart_granularity = resolve_granularity(window, granularity)
+    return {
+        "available": bool(rows),
+        "window": window.as_dict(),
+        "granularity": chart_granularity,
+        "trend": _sleep_trend(rows, chart_granularity),
     }
 
 
@@ -582,35 +790,414 @@ def _activity_goals(connection: sqlite3.Connection, window: DateWindow) -> dict[
     }
 
 
+def _insight(
+    *,
+    key: str,
+    kind: str,
+    category: str,
+    title: str,
+    text: str,
+    window: DateWindow,
+    sample_count: int,
+    coverage_percent: float,
+    basis: str,
+    method: str,
+    note: str | None = None,
+    sample_label: str = "samples",
+) -> dict[str, object]:
+    return {
+        "key": key,
+        "kind": kind,
+        "category": category,
+        "title": title,
+        "text": text,
+        "date_window": f"{window.start.isoformat()} to {window.end.isoformat()}",
+        "sample_count": sample_count,
+        "sample_label": sample_label,
+        "coverage_percent": round(coverage_percent, 1),
+        "comparison_basis": basis,
+        "method": method,
+        "note": note,
+    }
+
+
+def _direction(percent: float) -> tuple[str, float]:
+    if abs(percent) < 0.05:
+        return "essentially unchanged from", abs(percent)
+    return ("higher than" if percent > 0 else "lower than"), abs(percent)
+
+
+def _longest_streak(days: list[str]) -> int:
+    longest = current = 0
+    previous: date | None = None
+    for value in sorted(set(days)):
+        day = date.fromisoformat(value)
+        current = current + 1 if previous and day == previous + timedelta(days=1) else 1
+        longest = max(longest, current)
+        previous = day
+    return longest
+
+
+def _rolling_baseline_insight(
+    connection: sqlite3.Connection,
+    definition: MetricDefinition,
+    window: DateWindow,
+) -> dict[str, object] | None:
+    if window.days < 35:
+        return None
+    latest_start = window.end - timedelta(days=6)
+    baseline_end = latest_start - timedelta(days=1)
+    baseline_start = baseline_end - timedelta(days=27)
+    latest_rows = _daily_rows(connection, definition.key, latest_start, window.end, "combined", 0)
+    baseline_rows = _daily_rows(connection, definition.key, baseline_start, baseline_end, "combined", 0)
+    if len(latest_rows) < 5 or len(baseline_rows) < 14:
+        return None
+    latest = _aggregate_rows(definition, latest_rows)
+    baseline = _aggregate_rows(definition, baseline_rows)
+    if not latest or not baseline:
+        return None
+    latest_value = float(latest["canonical_value"])
+    baseline_value = float(baseline["canonical_value"])
+    if definition.kind == "cumulative":
+        latest_value /= len(latest_rows)
+        baseline_value /= len(baseline_rows)
+    if not baseline_value:
+        return None
+    percent = (latest_value - baseline_value) / abs(baseline_value) * 100
+    direction, magnitude = _direction(percent)
+    return _insight(
+        key=f"baseline-{definition.key}",
+        kind="rolling_baseline",
+        category=definition.category,
+        title=f"{definition.label}: recent baseline",
+        text=(
+            f"The latest 7 days were {magnitude:.1f}% {direction} the preceding "
+            "28-day personal baseline."
+        ),
+        window=window,
+        sample_count=int(latest["sample_count"]),
+        coverage_percent=len(latest_rows) / 7 * 100,
+        basis=f"{baseline_start.isoformat()} to {baseline_end.isoformat()}",
+        method=(
+            "Average per tracked day in the latest 7 days compared with the average per tracked day in the preceding 28 days."
+            if definition.kind == "cumulative"
+            else "Latest 7-day sample-weighted mean compared with the preceding 28-day mean."
+        ),
+    )
+
+
+def _paired_values(
+    connection: sqlite3.Connection,
+    left: str,
+    right: str,
+    window: DateWindow,
+) -> list[tuple[float, float]]:
+    def values(key: str) -> dict[str, float]:
+        if key == "sleep":
+            return {
+                str(row["wake_date"]): float(row["value"])
+                for row in connection.execute(
+                    """
+                    SELECT wake_date, SUM(asleep_seconds) / 3600.0 AS value
+                    FROM sleep_sessions WHERE wake_date BETWEEN ? AND ?
+                    GROUP BY wake_date HAVING SUM(asleep_seconds) > 0
+                    """,
+                    (window.start.isoformat(), window.end.isoformat()),
+                )
+            }
+        definition = METRICS[key]
+        column = "value_sum" if definition.kind == "cumulative" else "value_mean"
+        return {
+            str(row["local_date"]): float(row["value"])
+            for row in connection.execute(
+                f"""
+                SELECT local_date, {column} AS value FROM daily_metrics
+                WHERE metric_key = ? AND scope = 'combined' AND source_key = 0
+                  AND local_date BETWEEN ? AND ? AND {column} IS NOT NULL
+                """,
+                (key, window.start.isoformat(), window.end.isoformat()),
+            )
+        }
+
+    left_values = values(left)
+    right_values = values(right)
+    return [(left_values[day], right_values[day]) for day in sorted(left_values.keys() & right_values.keys())]
+
+
+def _pearson(pairs: list[tuple[float, float]]) -> float | None:
+    left_mean = sum(left for left, _right in pairs) / len(pairs)
+    right_mean = sum(right for _left, right in pairs) / len(pairs)
+    numerator = sum((left - left_mean) * (right - right_mean) for left, right in pairs)
+    left_spread = sum((left - left_mean) ** 2 for left, _right in pairs)
+    right_spread = sum((right - right_mean) ** 2 for _left, right in pairs)
+    denominator = math.sqrt(left_spread * right_spread)
+    return numerator / denominator if denominator else None
+
+
+def _correlation_insight(
+    connection: sqlite3.Connection,
+    window: DateWindow,
+    category: str | None,
+) -> dict[str, object] | None:
+    candidates = (
+        ("steps", "sleep", "Steps", "sleep duration", {None, "activity", "sleep"}),
+        ("steps", "resting_heart_rate", "Steps", "resting heart rate", {None, "activity", "heart"}),
+        ("resting_heart_rate", "sleep", "Resting heart rate", "sleep duration", {None, "heart", "sleep"}),
+    )
+    for left, right, left_label, right_label, categories in candidates:
+        if category not in categories:
+            continue
+        pairs = _paired_values(connection, left, right, window)
+        paired_coverage = len(pairs) / window.days * 100
+        if len(pairs) < 7 or paired_coverage < 40:
+            continue
+        coefficient = _pearson(pairs)
+        if coefficient is None:
+            continue
+        magnitude = abs(coefficient)
+        strength = "little" if magnitude < 0.2 else "a weak" if magnitude < 0.4 else "a moderate" if magnitude < 0.7 else "a strong"
+        relationship = "positive" if coefficient > 0 else "negative"
+        return _insight(
+            key=f"correlation-{left}-{right}",
+            kind="correlation",
+            category=category or "overview",
+            title="Paired-day association",
+            text=(
+                f"Across {len(pairs)} paired days, {left_label.lower()} and {right_label} "
+                f"showed {strength} {relationship} association (r = {coefficient:.2f})."
+            ),
+            window=window,
+            sample_count=len(pairs),
+            coverage_percent=paired_coverage,
+            basis="Calendar days containing both measures in the selected period.",
+            method="Pearson correlation across paired daily values; missing days are excluded.",
+            note="Correlation does not imply causation.",
+            sample_label="paired days",
+        )
+    return None
+
+
+def insights_summary(
+    connection: sqlite3.Connection,
+    window: DateWindow,
+    unit_system: str,
+    *,
+    category: str | None = None,
+    limit: int = 6,
+    metric_summaries: dict[str, dict[str, object]] | None = None,
+    sleep_data: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    """Return deterministic, coverage-gated, non-diagnostic narratives."""
+    overview_keys = (
+        "steps",
+        "active_energy",
+        "exercise_minutes",
+        "resting_heart_rate",
+        "hrv_sdnn",
+        "blood_glucose",
+        "body_mass",
+    )
+    definitions = (
+        CATEGORIES.get(category, ())
+        if category
+        else tuple(METRICS[key] for key in overview_keys)
+    )
+    available_summaries = metric_summaries or {}
+    insights: list[dict[str, object]] = []
+    period_count = 0
+    for definition in definitions:
+        summary = available_summaries.get(definition.key) or metric_summary(
+            connection,
+            definition.key,
+            window,
+            unit_system,
+            include_filters=False,
+        )
+        if not summary["available"]:
+            continue
+        comparison = summary["comparison"]
+        if (
+            period_count < 2
+            and summary["tracked_days"] >= 5
+            and summary["coverage_percent"] >= 50
+            and comparison["prior_tracked_days"] >= 5
+            and comparison["prior_coverage_percent"] >= 50
+            and comparison["percent"] is not None
+            and (
+                definition.kind != "cumulative"
+                or (
+                    summary["tracked_days"] == comparison["prior_tracked_days"]
+                    and summary["coverage_percent"] >= 80
+                )
+            )
+        ):
+            direction, magnitude = _direction(float(comparison["percent"]))
+            insights.append(
+                _insight(
+                    key=f"period-{definition.key}",
+                    kind="period_comparison",
+                    category=definition.category,
+                    title=f"{definition.label}: period change",
+                    text=f"{definition.label} was {magnitude:.1f}% {direction} the immediately preceding period.",
+                    window=window,
+                    sample_count=int(summary["sample_count"]),
+                    coverage_percent=float(summary["coverage_percent"]),
+                    basis=str(comparison["basis"]),
+                    method=(
+                        "Selected-period total compared with the equal-length preceding total."
+                        if definition.kind == "cumulative"
+                        else "Selected-period sample-weighted mean compared with the equal-length preceding mean."
+                    ),
+                )
+            )
+            period_count += 1
+
+    baseline = next(
+        (
+            item
+            for definition in definitions
+            if (item := _rolling_baseline_insight(connection, definition, window)) is not None
+        ),
+        None,
+    )
+    if baseline:
+        insights.append(baseline)
+
+    if category in {None, "activity"}:
+        for definition in CATEGORIES["activity"]:
+            if definition.kind != "cumulative":
+                continue
+            rows = _daily_rows(connection, definition.key, window.start, window.end, "combined", 0)
+            coverage = len(rows) / window.days * 100
+            streak = _longest_streak([str(row["local_date"]) for row in rows])
+            if len(rows) >= 5 and coverage >= 50 and streak >= 3:
+                insights.append(
+                    _insight(
+                        key=f"streak-{definition.key}",
+                        kind="consistency",
+                        category="activity",
+                        title=f"{definition.label}: recording consistency",
+                        text=f"{definition.label} data appeared on {streak} consecutive days at its longest in this selection.",
+                        window=window,
+                        sample_count=sum(int(row["sample_count"]) for row in rows),
+                        coverage_percent=coverage,
+                        basis="Consecutive calendar days containing at least one aggregate.",
+                        method="Longest run of tracked days; an unrecorded day ends the run and is not treated as zero.",
+                    )
+                )
+                break
+
+    if category in {None, "sleep"}:
+        sleep = sleep_data or sleep_summary(connection, window)
+        if sleep.get("available") and int(sleep["measured_nights"]) >= 5 and float(sleep["asleep_coverage_percent"]) >= 50:
+            nights = [float(point["asleep_hours"]) for point in _sleep_trend(
+                connection.execute(
+                    "SELECT * FROM sleep_sessions WHERE wake_date BETWEEN ? AND ? ORDER BY wake_date",
+                    (window.start.isoformat(), window.end.isoformat()),
+                ).fetchall(),
+                "day",
+            ) if point["asleep_hours"] is not None]
+            average = sum(nights) / len(nights)
+            variation = math.sqrt(sum((value - average) ** 2 for value in nights) / len(nights))
+            insights.append(
+                _insight(
+                    key="sleep-duration-consistency",
+                    kind="consistency",
+                    category="sleep",
+                    title="Sleep duration consistency",
+                    text=f"Nightly asleep duration varied by about {variation:.1f} hr around the selected-period average.",
+                    window=window,
+                    sample_count=int(sleep["measured_nights"]),
+                    coverage_percent=float(sleep["asleep_coverage_percent"]),
+                    basis=f"{sleep['measured_nights']} wake-up days with measured asleep duration.",
+                    method="Population standard deviation of logged nightly asleep duration; missing nights are excluded.",
+                    sample_label="measured nights",
+                )
+            )
+
+    correlation = _correlation_insight(connection, window, category)
+    if correlation:
+        insights.append(correlation)
+    return insights[:limit]
+
+
 def category_summary(
     connection: sqlite3.Connection,
     category: str,
     window: DateWindow,
     unit_system: str,
+    *,
+    granularity: str | None = None,
 ) -> dict[str, object]:
     if category == "sleep":
-        return {"category": "sleep", "window": window.as_dict(), "sleep": sleep_summary(connection, window), "metrics": []}
+        sleep = sleep_summary(connection, window, granularity)
+        return {
+            "category": "sleep",
+            "window": window.as_dict(),
+            "sleep": sleep,
+            "metrics": [],
+            "insights": insights_summary(
+                connection,
+                window,
+                unit_system,
+                category="sleep",
+                sleep_data=sleep,
+            ),
+        }
     definitions = CATEGORIES.get(category)
     if not definitions:
-        raise AnalyticsError("unknown_category", "That dashboard category is not supported in Phase 3.")
-    metrics = [metric_summary(connection, item.key, window, unit_system, include_filters=False) for item in definitions]
+        raise AnalyticsError("unknown_category", "That dashboard category is not supported.")
+    metrics = [
+        metric_summary(
+            connection,
+            item.key,
+            window,
+            unit_system,
+            include_filters=False,
+            granularity=granularity,
+        )
+        for item in definitions
+    ]
     payload = {
         "category": category,
         "window": window.as_dict(),
         "metrics": [item for item in metrics if item["available"]],
         "unavailable": [item["key"] for item in metrics if not item["available"]],
+        "insights": insights_summary(
+            connection,
+            window,
+            unit_system,
+            category=category,
+            metric_summaries={str(item["key"]): item for item in metrics},
+        ),
     }
     if category == "activity":
         payload["goals"] = _activity_goals(connection, window)
     return payload
 
 
-def overview_summary(connection: sqlite3.Connection, window: DateWindow, unit_system: str) -> dict[str, object]:
+def overview_summary(
+    connection: sqlite3.Connection,
+    window: DateWindow,
+    unit_system: str,
+    *,
+    granularity: str | None = None,
+) -> dict[str, object]:
     preferred = ("steps", "active_energy", "resting_heart_rate", "blood_glucose", "body_mass")
-    metrics = [metric_summary(connection, key, window, unit_system, include_filters=False) for key in preferred]
-    sleep = sleep_summary(connection, window)
+    metrics = [
+        metric_summary(
+            connection,
+            key,
+            window,
+            unit_system,
+            include_filters=False,
+            granularity=granularity,
+        )
+        for key in preferred
+    ]
+    sleep = sleep_summary(connection, window, granularity)
     cards = [metric for metric in metrics if metric["available"]]
-    if sleep.get("available"):
+    if sleep.get("available") and sleep.get("average_asleep_hours") is not None:
         cards.append(
             {
                 "key": "sleep",
@@ -619,8 +1206,8 @@ def overview_summary(connection: sqlite3.Connection, window: DateWindow, unit_sy
                 "formatted_value": f"{sleep['average_asleep_hours']:.1f} hr",
                 "headline_value": f"{sleep['average_asleep_hours']:.1f} hr",
                 "headline_label": "Average",
-                "tracked_days": sleep["logged_nights"],
-                "coverage_percent": sleep["coverage_percent"],
+                "tracked_days": sleep["measured_nights"],
+                "coverage_percent": sleep["asleep_coverage_percent"],
                 "comparison": sleep["comparison"],
             }
         )
@@ -663,9 +1250,26 @@ def overview_summary(connection: sqlite3.Connection, window: DateWindow, unit_sy
         """,
         (window.start.isoformat(), window.end.isoformat()),
     ).fetchone()[0]
+    manifest = connection.execute(
+        "SELECT imported_at, export_date FROM manifest WHERE id = 1"
+    ).fetchone()
+    bounds = _available_bounds(connection)
     return {
         "window": window.as_dict(),
         "cards": cards,
+        "insights": insights_summary(
+            connection,
+            window,
+            unit_system,
+            metric_summaries={str(item["key"]): item for item in metrics},
+            sleep_data=sleep,
+        ),
+        "freshness": {
+            "first_date": bounds[0].isoformat() if bounds else None,
+            "latest_date": bounds[1].isoformat() if bounds else None,
+            "imported_at": str(manifest["imported_at"]) if manifest else None,
+            "export_date": str(manifest["export_date"]) if manifest and manifest["export_date"] else None,
+        },
         "coverage": {
             "tracked_days": int(tracked),
             "period_days": window.days,

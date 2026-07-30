@@ -72,7 +72,8 @@ Sleep records separated by more than four hours form distinct sessions. Within a
 - staged/generic asleep duration is calculated separately from `InBed`;
 - `InBed` is never added to staged asleep duration;
 - Awake, Core, Deep, REM, and Unspecified durations remain separately visible;
-- a session with `InBed` but no asleep interval is labeled **In Bed only**;
+- a session with `InBed` but no asleep interval is labeled **In Bed only** and is excluded from average-asleep calculations rather than treated as zero sleep;
+- time-in-bed totals and averages use only explicit `InBed` intervals; a range without them displays **Not exported**, never zero;
 - the session is assigned to its wake-up day.
 
 These rules avoid the common error of adding a full `InBed` interval to the stages nested inside it.
@@ -83,9 +84,23 @@ Tracked-day coverage is `days with at least one supported aggregate / calendar d
 
 Headline calculations use every selected record. Trend responses are deterministically limited to 240 points while preserving the first and last point, preventing multi-year responses from returning thousands of chart samples.
 
+## Chart grouping and descriptive insights
+
+Trend endpoints accept `granularity=auto|day|week|month`. Automatic grouping uses daily points through 90 days, weekly points through two years, and monthly points for longer ranges. Grouped points carry canonical calendar bucket boundaries so charts preserve elapsed time and break across missing buckets. Responses remain capped at 240 deterministic points, while headline calculations continue to use every selected record. Every category chart has a complete server-rendered table fallback for the capped response and a generated text summary; overview charts link to that table.
+
+Insights are deterministic and are withheld when their coverage gate is not met:
+
+- Period comparisons require at least five tracked days and 50% day coverage in both the selected and immediately preceding equal-length periods. Cumulative metrics additionally require at least 80% coverage and the same tracked-day count in both periods so missing days cannot act like zero.
+- Rolling baseline comparisons require a selection of at least 35 days, at least five tracked days in the latest seven days, and at least 14 tracked days in the preceding 28 days. Cumulative metrics compare averages per tracked day rather than treating untracked days as zero.
+- Recording streaks require at least five tracked days, 50% selected-period coverage, and a run of at least three consecutive tracked days.
+- Sleep-duration consistency requires at least five wake-up days with measured asleep duration and 50% measured-night coverage. In-Bed-only nights are excluded.
+- Paired-day Pearson correlations require at least seven paired days and 40% paired-day coverage. They are always shown with “Correlation does not imply causation.”
+
+Each insight reports its date window, sample count, coverage, comparison basis, and method. Language is deliberately neutral. Missing days are excluded rather than converted to zero. Personal daily highs and lows are withheld until day-completeness semantics can distinguish a complete day from a partially recorded day.
+
 ## Current limits
 
 - Combined activity is an explainable estimate and may differ from Apple Health totals.
 - Source/device filters apply to metric endpoints; sleep is currently combined through interval union.
-- Correlations and narrative insight rules are Phase 4 work.
+- Workout-frequency insights wait for Phase 5 workout normalization.
 - Workouts, route details, and ECG visualization are Phase 5 work.

@@ -3,7 +3,7 @@
 A private, local-first web dashboard for exploring data exported from Apple Health.
 
 > [!IMPORTANT]
-> This project is under active development. Complete Apple Health exports can be imported locally, and Phase 3 provides normalized activity, vitals, blood-glucose, sleep, and body summaries. Full chart interactions, workouts, routes, and ECG views arrive in later phases.
+> This project is under active development. Complete Apple Health exports can be imported locally, and Phase 4 provides responsive activity, vitals, blood-glucose, sleep, and body dashboards with accessible charts and coverage-gated descriptive insights. Workouts, routes, and ECG views arrive in Phase 5.
 
 ## Product goals
 
@@ -30,7 +30,7 @@ Apple Health exports can contain dates of birth, clinical metadata, precise work
 | 1 — Local application shell | Complete |
 | 2 — Transactional import | Complete |
 | 3 — Metrics and aggregation | Complete |
-| 4 — Dashboard and insights | Not started |
+| 4 — Dashboard and insights | Complete |
 | 5 — Workouts, routes, and ECG | Not started |
 | 6 — Hardening and public release | Not started |
 

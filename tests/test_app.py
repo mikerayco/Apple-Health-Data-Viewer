@@ -65,7 +65,7 @@ class ApplicationShellTests(AppTestCase):
     def test_health_endpoint_is_minimal(self) -> None:
         response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json, {"phase": 3, "status": "ok", "version": "0.3.0"})
+        self.assertEqual(response.json, {"phase": 4, "status": "ok", "version": "0.4.0"})
         self.assertNotIn(str(self.data_dir).encode(), response.data)
 
     def test_security_headers_are_applied(self) -> None:

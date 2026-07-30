@@ -14,11 +14,14 @@ from werkzeug.exceptions import SecurityError
 from .analytics import (
     AnalyticsError,
     category_summary,
+    insights_summary,
     metric_summary,
+    metric_trend_summary,
     open_health_database,
     overview_summary,
     resolve_window,
     sleep_summary,
+    sleep_trend_summary,
 )
 from .database import (
     add_managed_source,
@@ -160,6 +163,10 @@ def _date_parameters() -> dict[str, str | None]:
     }
 
 
+def _granularity_parameter() -> str | None:
+    return request.args.get("granularity")
+
+
 def _filter_id(name: str) -> int | None:
     value = request.args.get(name)
     if value in {None, ""}:
@@ -176,8 +183,19 @@ def _dashboard_data(kind: str) -> tuple[dict[str, object] | None, AnalyticsError
             window = resolve_window(connection, **_date_parameters())
             unit_system = _stored_setting("unit_system", "metric")
             if kind == "overview":
-                return overview_summary(connection, window, unit_system), None
-            return category_summary(connection, kind, window, unit_system), None
+                return overview_summary(
+                    connection,
+                    window,
+                    unit_system,
+                    granularity=_granularity_parameter(),
+                ), None
+            return category_summary(
+                connection,
+                kind,
+                window,
+                unit_system,
+                granularity=_granularity_parameter(),
+            ), None
     except AnalyticsError as error:
         return None, error
 
@@ -404,6 +422,7 @@ def overview():
             dashboard=dashboard,
             analytics_error=analytics_error,
             selected_period=request.args.get("period", "30d"),
+            selected_granularity=request.args.get("granularity", "auto"),
         ),
     )
 
@@ -451,6 +470,7 @@ def _category(key: str, active_page: str):
             dashboard=dashboard,
             analytics_error=analytics_error,
             selected_period=request.args.get("period", "30d"),
+            selected_granularity=request.args.get("granularity", "auto"),
         ),
     )
 
@@ -472,7 +492,12 @@ def overview_api():
             return jsonify(
                 {
                     "status": "ready",
-                    **overview_summary(connection, window, _stored_setting("unit_system", "metric")),
+                    **overview_summary(
+                        connection,
+                        window,
+                        _stored_setting("unit_system", "metric"),
+                        granularity=_granularity_parameter(),
+                    ),
                 }
             )
     except AnalyticsError as error:
@@ -495,6 +520,31 @@ def metric_api(metric_key: str):
                         _stored_setting("unit_system", "metric"),
                         source_id=_filter_id("source"),
                         device_id=_filter_id("device"),
+                        granularity=_granularity_parameter(),
+                    ),
+                }
+            )
+    except AnalyticsError as error:
+        status = 404 if error.code == "unknown_metric" else 409 if error.code in {"empty", "reimport_required", "no_supported_metrics"} else 400
+        return jsonify({"status": error.code, "message": error.public_message}), status
+
+
+@web.get("/api/metrics/<metric_key>/trend")
+def metric_trend_api(metric_key: str):
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            window = resolve_window(connection, **_date_parameters())
+            return jsonify(
+                {
+                    "status": "ready",
+                    **metric_trend_summary(
+                        connection,
+                        metric_key,
+                        window,
+                        _stored_setting("unit_system", "metric"),
+                        source_id=_filter_id("source"),
+                        device_id=_filter_id("device"),
+                        granularity=_granularity_parameter(),
                     ),
                 }
             )
@@ -508,7 +558,53 @@ def sleep_api():
     try:
         with closing(open_health_database(_manager().active_database)) as connection:
             window = resolve_window(connection, **_date_parameters())
-            return jsonify({"status": "ready", **sleep_summary(connection, window)})
+            return jsonify(
+                {
+                    "status": "ready",
+                    **sleep_summary(connection, window, _granularity_parameter()),
+                }
+            )
+    except AnalyticsError as error:
+        status = 409 if error.code in {"empty", "reimport_required", "no_supported_metrics"} else 400
+        return jsonify({"status": error.code, "message": error.public_message}), status
+
+
+@web.get("/api/sleep/trend")
+def sleep_trend_api():
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            window = resolve_window(connection, **_date_parameters())
+            return jsonify(
+                {
+                    "status": "ready",
+                    **sleep_trend_summary(connection, window, _granularity_parameter()),
+                }
+            )
+    except AnalyticsError as error:
+        status = 409 if error.code in {"empty", "reimport_required", "no_supported_metrics"} else 400
+        return jsonify({"status": error.code, "message": error.public_message}), status
+
+
+@web.get("/api/insights")
+def insights_api():
+    category = request.args.get("category")
+    if category not in {None, "activity", "heart", "sleep", "body"}:
+        return jsonify({"status": "invalid_category", "message": "Choose a valid insight category."}), 400
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            window = resolve_window(connection, **_date_parameters())
+            return jsonify(
+                {
+                    "status": "ready",
+                    "window": window.as_dict(),
+                    "insights": insights_summary(
+                        connection,
+                        window,
+                        _stored_setting("unit_system", "metric"),
+                        category=category,
+                    ),
+                }
+            )
     except AnalyticsError as error:
         status = 409 if error.code in {"empty", "reimport_required", "no_supported_metrics"} else 400
         return jsonify({"status": error.code, "message": error.public_message}), status
@@ -572,7 +668,7 @@ def cycle_theme():
 
 @web.get("/healthz")
 def healthz():
-    return jsonify({"status": "ok", "version": __version__, "phase": 3})
+    return jsonify({"status": "ok", "version": __version__, "phase": 4})
 
 
 @web.app_template_filter("bytesize")

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_trend_chart.html" import trend_chart %}
 {% block title %}{{ page.title }} · Apple Health Data Viewer{% endblock %}
 {% block content %}
 <section class="page-head category-head">
@@ -9,22 +10,37 @@
 {% if dashboard and dashboard.category == "sleep" %}
   {% set sleep = dashboard.sleep %}
   {% if sleep.available %}
-  <section class="category-canvas">
+  <section class="category-canvas populated-category">
     <div class="category-metrics">
-      {% for label, value, note in (("Average asleep", sleep.average_asleep_hours ~ " hr", sleep.sessions ~ " sessions"), ("Time in bed", sleep.total_in_bed_hours ~ " hr", "selected-period total"), ("Logged nights", sleep.logged_nights, sleep.coverage_percent ~ "% coverage"), ("Awake", sleep.total_awake_hours ~ " hr", "overlapping intervals unioned")) %}
+      {% for label, value, note in (("Average asleep", (sleep.average_asleep_hours ~ " hr") if sleep.average_asleep_hours is not none else "—", sleep.measured_nights ~ " measured nights"), ("Time in bed", (sleep.total_in_bed_hours ~ " hr") if sleep.total_in_bed_hours is not none else "Not exported", (sleep.in_bed_nights ~ " nights with explicit In Bed data") if sleep.in_bed_nights else "No explicit In Bed records in range"), ("Logged nights", sleep.logged_nights, sleep.coverage_percent ~ "% coverage"), ("Awake", sleep.total_awake_hours ~ " hr", "overlapping intervals unioned")) %}
       <article><small>{{ "%02d" | format(loop.index) }}</small><h2>{{ label }}</h2><strong>{{ value }}</strong><span>{{ note }}</span></article>
       {% endfor %}
     </div>
-    <div class="category-chart data-table-panel">
+    <article class="category-chart chart-feature">
+      <div class="chart-header"><div><span>{{ sleep.granularity }} trend</span><h2>Asleep duration</h2></div><span class="coverage-pill">{{ sleep.measured_nights }} measured nights · {{ sleep.asleep_coverage_percent }}%</span></div>
+      {{ trend_chart(url_for('web.sleep_trend_api', period=selected_period, start=request.args.get('start'), end=request.args.get('end'), granularity=selected_granularity), "Asleep duration", "asleep_hours", "hr", false, true) }}
+      <p class="method-copy">{{ sleep.method }} Grouped asleep points average measured nights. Time in bed averages only nights containing explicit In Bed records.</p>
+    </article>
+
+    {% if dashboard.insights %}
+    <section class="category-insights" aria-labelledby="category-insights-title">
+      <div><span class="eyebrow"><i></i> Qualified patterns</span><h2 id="category-insights-title">Descriptive, coverage-gated observations.</h2></div>
+      <ol class="compact-insight-list">
+        {% for insight in dashboard.insights %}<li><span>{{ "%02d" | format(loop.index) }}</span><div><h3>{{ insight.title }}</h3><p>{{ insight.text }}</p><small>{{ insight.sample_count }} {{ insight.sample_label }} · {{ insight.coverage_percent }}% coverage · {{ insight.date_window }}</small>{% if insight.note %}<strong>{{ insight.note }}</strong>{% endif %}<details><summary>Method</summary><p>{{ insight.method }} Basis: {{ insight.comparison_basis }}</p></details></div></li>{% endfor %}
+      </ol>
+    </section>
+    {% endif %}
+
+    <article class="category-chart data-table-panel">
       <div class="chart-header"><div><span>Sleep stages</span><h2>Assigned to wake-up day</h2></div><span class="coverage-pill">{{ sleep.logged_nights }} nights</span></div>
       <div class="stage-strip" aria-label="Selected-period stage totals">
         {% for label, value in (("Core", sleep.stage_hours.core), ("Deep", sleep.stage_hours.deep), ("REM", sleep.stage_hours.rem), ("Unspecified", sleep.stage_hours.unspecified)) %}<div><span>{{ label }}</span><strong>{{ value }} hr</strong></div>{% endfor %}
       </div>
-      <div class="table-scroll"><table><thead><tr><th>Wake day</th><th>Asleep</th><th>In bed</th><th>Coverage</th></tr></thead><tbody>
-        {% for point in sleep.trend[-30:] | reverse %}<tr><td>{{ point.date }}</td><td>{{ point.asleep_hours }} hr</td><td>{{ point.in_bed_hours }} hr</td><td>{{ "In Bed only" if point.in_bed_only else "Measured sleep" }}</td></tr>{% endfor %}
+      <div class="table-scroll"><table><caption class="sr-only">Sleep duration by grouped wake date</caption><thead><tr><th>Wake period</th><th>Average asleep</th><th>Average time in bed</th><th>Logged nights</th><th>In Bed data</th></tr></thead><tbody>
+        {% for point in sleep.trend | reverse %}<tr><td>{{ point.date }}{% if point.end_date != point.date %} – {{ point.end_date }}{% endif %}</td><td>{{ (point.asleep_hours ~ " hr") if point.asleep_hours is not none else "—" }}</td><td>{{ (point.in_bed_hours ~ " hr") if point.in_bed_hours is not none else "Not exported" }}</td><td>{{ point.nights }}</td><td>{{ (point.in_bed_nights ~ " nights") if point.in_bed_nights else "No explicit records" }}</td></tr>{% endfor %}
       </tbody></table></div>
-      <p class="method-copy">{{ sleep.method }}{% if sleep.in_bed_only_sessions %} {{ sleep.in_bed_only_sessions }} session(s) contain In Bed data only.{% endif %}</p>
-    </div>
+      {% if sleep.in_bed_only_sessions %}<p class="method-copy">{{ sleep.in_bed_only_sessions }} session(s) contain In Bed data only and are labeled separately.</p>{% endif %}
+    </article>
   </section>
   {% else %}
   <section class="empty-panel"><h2>No sleep records in this range</h2><p>Missing nights are unknown and are not shown as zero-duration sleep.</p></section>
@@ -38,13 +54,22 @@
       <h2>{{ metric.label }}</h2>
       <strong>{{ metric.headline_value }}</strong>
       <span>{{ metric.headline_label }} · {{ metric.sample_count | int }} samples across {{ metric.tracked_days }} days</span>
-      {% if metric.comparison.percent is not none %}<p class="comparison-note">{{ "%+.1f" | format(metric.comparison.percent) }}% vs prior period</p>{% endif %}
+      {% if metric.comparison.percent is not none %}<p class="comparison-note">{{ "%+.1f" | format(metric.comparison.percent) }}% vs prior period</p>{% else %}<p class="comparison-note">No qualified prior comparison</p>{% endif %}
       {% if metric.estimated_days %}<p class="uncertainty-note">Combined estimate · overlap on {{ metric.estimated_days }} day(s)</p>{% endif %}
     </article>
     {% else %}
     <article class="wide-empty"><h2>No supported {{ page.title | lower }} metrics in this range</h2><p>Unavailable measures are hidden rather than shown as zero.</p></article>
     {% endfor %}
   </div>
+
+  {% if dashboard.insights %}
+  <section class="category-insights" aria-labelledby="category-insights-title">
+    <div><span class="eyebrow"><i></i> Qualified patterns</span><h2 id="category-insights-title">Descriptive, coverage-gated observations.</h2></div>
+    <ol class="compact-insight-list">
+      {% for insight in dashboard.insights %}<li><span>{{ "%02d" | format(loop.index) }}</span><div><h3>{{ insight.title }}</h3><p>{{ insight.text }}</p><small>{{ insight.sample_count }} {{ insight.sample_label }} · {{ insight.coverage_percent }}% coverage · {{ insight.date_window }}</small>{% if insight.note %}<strong>{{ insight.note }}</strong>{% endif %}<details><summary>Method</summary><p>{{ insight.method }} Basis: {{ insight.comparison_basis }}</p></details></div></li>{% endfor %}
+    </ol>
+  </section>
+  {% endif %}
 
   {% if dashboard.goals and dashboard.goals.available %}
   <article class="category-chart data-table-panel">
@@ -56,18 +81,19 @@
 
   {% for metric in dashboard.metrics %}
   <article class="category-chart data-table-panel">
-    <div class="chart-header"><div><span>{{ metric.headline_label }}</span><h2>{{ metric.label }}</h2></div><span class="coverage-pill">{{ metric.coverage_percent }}% day coverage</span></div>
+    <div class="chart-header"><div><span>{{ metric.granularity }} trend · {{ metric.headline_label }}</span><h2>{{ metric.label }}</h2></div><span class="coverage-pill">{{ metric.coverage_percent }}% day coverage</span></div>
+    {{ trend_chart(url_for('web.metric_trend_api', metric_key=metric.key, period=selected_period, start=request.args.get('start'), end=request.args.get('end'), granularity=selected_granularity), metric.label, "value", metric.unit, false, true) }}
     {% if metric.kind == "measurement" %}
       <div class="stat-line"><span>Period mean <strong>{{ metric.formatted_value }}</strong></span><span>Median <strong>{{ metric.median }} {{ metric.unit }}</strong></span><span>Range <strong>{{ metric.minimum }}–{{ metric.maximum }} {{ metric.unit }}</strong></span></div>
     {% endif %}
     {% if metric.key == "blood_glucose" and metric.readings %}
-    <div class="table-scroll"><table><thead><tr><th>Reading time</th><th>Value</th><th>Context</th><th>Source / device</th></tr></thead><tbody>
+    <div class="table-scroll"><table><caption class="sr-only">Blood glucose readings</caption><thead><tr><th>Reading time</th><th>Value</th><th>Context</th><th>Source / device</th></tr></thead><tbody>
       {% for reading in metric.readings %}<tr><td>{{ reading.timestamp }}</td><td>{{ reading.value }} {{ reading.unit }}</td><td>{{ reading.meal_context or "Not exported" }}</td><td>{{ reading.source }}{% if reading.device %} · {{ reading.device }}{% endif %}</td></tr>{% endfor %}
     </tbody></table></div>
     {% if metric.readings_limited %}<p class="method-copy">Showing the latest 200 readings in the selected range.</p>{% endif %}
     {% endif %}
-    <div class="table-scroll"><table><thead><tr><th>Date</th><th>{{ "Total" if metric.kind == "cumulative" else "Mean" }}</th><th>Samples</th><th>Method</th></tr></thead><tbody>
-      {% for point in metric.trend[-30:] | reverse %}<tr><td>{{ point.date }}</td><td>{{ point.value }} {{ metric.unit }}</td><td>{{ point.samples }}</td><td>{{ "Combined estimate" if point.estimated else "Observed" }}</td></tr>{% endfor %}
+    <div class="table-scroll"><table><caption class="sr-only">{{ metric.label }} trend data</caption><thead><tr><th>Period</th><th>{{ "Total" if metric.kind == "cumulative" else "Mean" }}</th><th>Samples</th><th>Method</th></tr></thead><tbody>
+      {% for point in metric.trend | reverse %}<tr><td>{{ point.date }}{% if point.end_date != point.date %} – {{ point.end_date }}{% endif %}</td><td>{{ point.value }} {{ metric.unit }}</td><td>{{ point.samples }}</td><td>{{ "Combined estimate" if point.estimated else "Observed" }}</td></tr>{% endfor %}
     </tbody></table></div>
     <p class="method-copy">{{ metric.method }}{% if metric.suspected_outliers %} {{ metric.suspected_outliers }} statistical outlier(s) are flagged and remain included.{% endif %}</p>
   </article>
@@ -80,7 +106,7 @@
   </div>
   <div class="category-chart">
     <div class="chart-header"><div><span>Status</span><h2>{{ analytics_error.public_message if analytics_error else "This view is scheduled for a later phase" if quality else "Waiting for your first import" }}</h2></div></div>
-    <div class="empty-action"><p>{% if analytics_error and analytics_error.code == "reimport_required" %}The current raw snapshot remains safe. Re-import once to build normalized Phase 3 aggregates.{% elif analytics_error and quality %}Choose another date preset or custom range. Missing data remains unknown rather than becoming zero.{% elif quality %}Workout and ECG details arrive in Phase 5.{% else %}Once imported, this view will show available measurements and coverage—not invented zeroes.{% endif %}</p><a href="{{ url_for('web.setup') if not quality or (analytics_error and analytics_error.code == 'reimport_required') else url_for('web.overview') if analytics_error else url_for('web.data_quality') }}">{{ "Open import setup" if not quality or (analytics_error and analytics_error.code == "reimport_required") else "Reset date range" if analytics_error else "Review inventory" }} →</a></div>
+    <div class="empty-action"><p>{% if analytics_error and analytics_error.code == "reimport_required" %}The current raw snapshot remains safe. Re-import once to build normalized aggregates.{% elif analytics_error and quality %}Choose another date preset or custom range. Missing data remains unknown rather than becoming zero.{% elif quality %}Workout and ECG details arrive in Phase 5.{% else %}Once imported, this view will show available measurements and coverage—not invented zeroes.{% endif %}</p><a href="{{ url_for('web.setup') if not quality or (analytics_error and analytics_error.code == 'reimport_required') else url_for('web.overview') if analytics_error else url_for('web.data_quality') }}">{{ "Open import setup" if not quality or (analytics_error and analytics_error.code == 'reimport_required') else "Reset date range" if analytics_error else "Review inventory" }} →</a></div>
   </div>
 </section>
 {% endif %}

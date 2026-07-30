@@ -195,10 +195,23 @@ class ImportRouteTests(unittest.TestCase):
         )
         self.assertEqual(steps.json["value"], 1500.0)
         self.assertEqual(steps.json["estimated_days"], 1)
+        self.assertEqual(steps.json["granularity"], "day")
+        trend = self.client.get("/api/metrics/steps/trend?period=all")
+        self.assertEqual(trend.status_code, 200)
+        self.assertEqual(trend.json["trend"][0]["value"], 1500.0)
+        self.assertNotIn("filters", trend.json)
+        self.assertNotIn("comparison", trend.json)
+        self.assertEqual(
+            self.client.get("/api/metrics/steps?period=all&granularity=hour").status_code,
+            400,
+        )
         sleep = self.client.get(
             "/api/sleep?period=custom&start=2024-01-02&end=2024-01-02"
         )
         self.assertEqual(sleep.json["average_asleep_hours"], 7.0)
+        sleep_trend = self.client.get("/api/sleep/trend?period=all")
+        self.assertEqual(sleep_trend.status_code, 200)
+        self.assertEqual(sleep_trend.json["trend"][0]["asleep_hours"], 7.0)
         preference = self.client.post(
             "/settings/preferences",
             data={"csrf_token": self.token(), "theme": "system", "unit_system": "imperial"},
@@ -212,6 +225,12 @@ class ImportRouteTests(unittest.TestCase):
         self.assertIn(b"154.3 lb", self.client.get("/body?period=all").data)
         dashboard = self.client.get("/overview?period=all")
         self.assertIn(b"1,500 steps", dashboard.data)
+        self.assertIn(b"data-trend-chart", dashboard.data)
+        self.assertIn(b"No insight passes", dashboard.data)
+        insights = self.client.get("/api/insights?period=all")
+        self.assertEqual(insights.status_code, 200)
+        self.assertEqual(insights.json["insights"], [])
+        self.assertEqual(self.client.get("/api/insights?category=workouts").status_code, 400)
         self.assertEqual(self.client.get("/api/metrics/not-real?period=all").status_code, 404)
         self.assertEqual(self.client.get("/api/overview?period=invalid").status_code, 400)
         self.assertEqual(self.client.get("/api/metrics/steps?period=all&source=-1").status_code, 400)

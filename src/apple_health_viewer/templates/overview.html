@@ -1,11 +1,17 @@
 {% extends "base.html" %}
+{% from "_trend_chart.html" import trend_chart %}
 {% block title %}Overview · Apple Health Data Viewer{% endblock %}
 {% block content %}
 <section class="page-head overview-head">
   <div>
     <span class="eyebrow"><i></i> Personal health overview</span>
     <h1>{% if dashboard %}Your selected period.{% elif analytics_error and analytics_error.code == "reimport_required" %}Re-import to calculate metrics.{% elif analytics_error and quality %}Adjust the selected range.{% else %}Good morning.{% endif %}</h1>
-    <p>{% if dashboard %}{{ dashboard.window.start }} through {{ dashboard.window.end }} · compared with the immediately preceding {{ dashboard.window.days }} days.{% elif analytics_error %}{{ analytics_error.public_message }}{% else %}Your data story will begin here after the first import.{% endif %}</p>
+    <p>
+      {% if dashboard %}
+        {{ dashboard.window.start }} through {{ dashboard.window.end }} · compared with the immediately preceding {{ dashboard.window.days }} days.
+        {% if dashboard.freshness.latest_date %}<span class="freshness-note">Latest supported data: {{ dashboard.freshness.latest_date }} · imported {{ dashboard.freshness.imported_at }}</span>{% endif %}
+      {% elif analytics_error %}{{ analytics_error.public_message }}{% else %}Your data story will begin here after the first import.{% endif %}
+    </p>
   </div>
   {% include "_date_filter.html" %}
 </section>
@@ -13,36 +19,72 @@
 {% if dashboard %}
 <section class="metric-strip dashboard-metrics" aria-label="Available health metric summary">
   {% for metric in dashboard.cards %}
+    {% if metric.key == "sleep" %}
+      {% set detail_url = url_for('web.sleep', period=selected_period, start=request.args.get('start'), end=request.args.get('end'), granularity=selected_granularity) %}
+      {% set chart_url = url_for('web.sleep_trend_api', period=selected_period, start=request.args.get('start'), end=request.args.get('end'), granularity=selected_granularity) %}
+      {% set chart_key = "asleep_hours" %}
+      {% set chart_unit = "hr" %}
+    {% else %}
+      {% set detail_url = url_for('web.activity' if metric.category == 'activity' else 'web.heart' if metric.category == 'heart' else 'web.body', period=selected_period, start=request.args.get('start'), end=request.args.get('end'), granularity=selected_granularity) %}
+      {% set chart_url = url_for('web.metric_trend_api', metric_key=metric.key, period=selected_period, start=request.args.get('start'), end=request.args.get('end'), granularity=selected_granularity) %}
+      {% set chart_key = "value" %}
+      {% set chart_unit = metric.unit %}
+    {% endif %}
     <article>
       <span>{{ "%02d" | format(loop.index) }}</span>
-      <h2><a href="{{ url_for('web.sleep') if metric.key == 'sleep' else url_for('web.activity') if metric.category == 'activity' else url_for('web.heart') if metric.category == 'heart' else url_for('web.body') }}?period={{ selected_period }}{% if selected_period == 'custom' %}&amp;start={{ request.args.get('start', '') }}&amp;end={{ request.args.get('end', '') }}{% endif %}">{{ metric.label }}</a></h2>
+      <h2><a href="{{ detail_url }}">{{ metric.label }}</a></h2>
       <strong>{{ metric.headline_value }}</strong>
       <small>{{ metric.headline_label }} · {{ metric.tracked_days }} tracked {{ "day" if metric.tracked_days == 1 else "days" }}</small>
-      {% if metric.comparison.percent is not none %}<p class="comparison-note">{{ "%+.1f" | format(metric.comparison.percent) }}% vs prior period</p>{% else %}<p class="comparison-note">No prior-period comparison</p>{% endif %}
+      {% if metric.comparison.percent is not none %}<p class="comparison-note">{{ "%+.1f" | format(metric.comparison.percent) }}% vs prior period</p>{% else %}<p class="comparison-note">No qualified prior comparison</p>{% endif %}
+      {{ trend_chart(chart_url, metric.label, chart_key, chart_unit, true) }}
     </article>
   {% else %}
     <article class="wide-empty"><h2>No supported metrics in this range</h2><p>Missing data remains unknown rather than being displayed as zero.</p></article>
   {% endfor %}
 </section>
 
-<section class="dashboard-lower coverage-grid">
-  <article class="insight-panel">
-    <span class="eyebrow"><i></i> Coverage</span>
-    <h2>{{ dashboard.coverage.tracked_days }} of {{ dashboard.coverage.period_days }} days contain supported data.</h2>
-    <ul>
-      <li><span>01</span>{{ dashboard.coverage.percent }}% selected-period coverage</li>
-      <li><span>02</span>{{ dashboard.coverage.categories }} available categories</li>
-      <li><span>03</span>{{ dashboard.coverage.sources }} sources · {{ dashboard.coverage.devices }} devices</li>
-      <li><span>04</span>{{ dashboard.coverage.missing_days }} days without supported records</li>
-    </ul>
+<section class="dashboard-lower insight-coverage-grid">
+  <article class="insight-panel" aria-labelledby="insight-title">
+    <span class="eyebrow"><i></i> Descriptive insights</span>
+    <h2 id="insight-title">Patterns with enough data to describe.</h2>
+    {% if dashboard.insights %}
+      <ol class="insight-list">
+        {% for insight in dashboard.insights %}
+          <li>
+            <span>{{ "%02d" | format(loop.index) }}</span>
+            <div>
+              <h3>{{ insight.title }}</h3>
+              <p>{{ insight.text }}</p>
+              <small>{{ insight.sample_count }} {{ insight.sample_label }} · {{ insight.coverage_percent }}% coverage · {{ insight.date_window }}</small>
+              {% if insight.note %}<strong>{{ insight.note }}</strong>{% endif %}
+              <details><summary>Method</summary><p>{{ insight.method }} Basis: {{ insight.comparison_basis }}</p></details>
+            </div>
+          </li>
+        {% endfor %}
+      </ol>
+    {% else %}
+      <div class="insight-empty"><p>No insight passes the current sample and coverage gates. Try a longer range; sparse data remains undescribed rather than guessed.</p></div>
+    {% endif %}
   </article>
-  <article class="privacy-panel"><span class="lock-mark" aria-hidden="true"></span><div><small>Method boundary</small><h2>Descriptive, never diagnostic.</h2><p>Prior-period changes are neutral comparisons. Missing days are not treated as zero.</p></div></article>
+
+  <aside class="coverage-panel" aria-labelledby="coverage-title">
+    <span class="eyebrow"><i></i> Coverage</span>
+    <h2 id="coverage-title">{{ dashboard.coverage.tracked_days }} <small>of {{ dashboard.coverage.period_days }} days</small></h2>
+    <progress class="coverage-meter" value="{{ dashboard.coverage.percent }}" max="100" aria-label="{{ dashboard.coverage.percent }} percent selected-period coverage">{{ dashboard.coverage.percent }}%</progress>
+    <dl>
+      <div><dt>Selected-period coverage</dt><dd>{{ dashboard.coverage.percent }}%</dd></div>
+      <div><dt>Available categories</dt><dd>{{ dashboard.coverage.categories }}</dd></div>
+      <div><dt>Sources / devices</dt><dd>{{ dashboard.coverage.sources }} / {{ dashboard.coverage.devices }}</dd></div>
+      <div><dt>Days without records</dt><dd>{{ dashboard.coverage.missing_days }}</dd></div>
+    </dl>
+    <p>Missing days are unknown, not zero. Insights appear only after documented coverage gates are met.</p>
+  </aside>
 </section>
 {% else %}
 <section class="empty-story{% if quality %} imported-story{% endif %}" aria-labelledby="empty-title">
   <div class="story-copy">
-    <span class="story-index">{% if analytics_error and analytics_error.code == "reimport_required" %}03 / REPROCESS{% elif quality %}03 / RANGE{% else %}00 / READY{% endif %}</span>
-    <h2 id="empty-title">{% if analytics_error and analytics_error.code == "reimport_required" %}The raw snapshot is safe, but needs Phase 3 aggregates.{% elif quality %}No supported data matches this range.{% else %}A clear view is waiting for your data.{% endif %}</h2>
+    <span class="story-index">{% if analytics_error and analytics_error.code == "reimport_required" %}03 / REPROCESS{% elif quality %}04 / RANGE{% else %}00 / READY{% endif %}</span>
+    <h2 id="empty-title">{% if analytics_error and analytics_error.code == "reimport_required" %}The raw snapshot is safe, but needs current aggregates.{% elif quality %}No supported data matches this range.{% else %}A clear view is waiting for your data.{% endif %}</h2>
     <p>{% if analytics_error and analytics_error.code == "reimport_required" %}Re-import the retained or configured source once. The transactional importer will compute normalized metrics without risking the active snapshot.{% elif quality %}Choose another preset or custom range. Missing data remains unknown rather than becoming zero.{% else %}Import an Apple Health export to reveal source-aware trends without sending a record anywhere.{% endif %}</p>
     <a class="primary-button arrow-button" href="{{ url_for('web.setup') if not quality or (analytics_error and analytics_error.code == 'reimport_required') else url_for('web.overview') }}">{{ "Re-import source" if analytics_error and analytics_error.code == "reimport_required" else "Configure data source" if not quality else "Reset date range" }} <span aria-hidden="true">→</span></a>
   </div>

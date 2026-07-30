@@ -1,0 +1,15 @@
+{% macro trend_chart(url, label, value_key="value", unit="", compact=false, has_table=false) -%}
+<div class="trend-chart{% if compact %} trend-chart-compact{% endif %}"
+     data-trend-chart
+     data-chart-url="{{ url }}"
+     data-chart-label="{{ label }}"
+     data-chart-value="{{ value_key }}"
+     data-chart-unit="{{ unit }}"
+     data-chart-has-table="{{ 'true' if has_table else 'false' }}"
+     {% if compact %}data-chart-compact="true"{% endif %}>
+  <div class="chart-state" data-chart-status role="status" hidden>Loading trend…</div>
+  <svg data-chart-svg hidden role="img" focusable="false"></svg>
+  <p class="chart-text-summary" data-chart-summary></p>
+  <noscript><p class="chart-noscript">Interactive chart unavailable without JavaScript. {% if has_table %}The same grouped values remain available in the table below.{% else %}Open the linked category page for its grouped data table.{% endif %}</p></noscript>
+</div>
+{%- endmacro %}

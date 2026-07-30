@@ -11,6 +11,7 @@ import unittest
 from apple_health_viewer.analytics import (
     AnalyticsError,
     category_summary,
+    insights_summary,
     metric_summary,
     open_health_database,
     overview_summary,
@@ -175,6 +176,20 @@ class GoldenAggregationTests(unittest.TestCase):
         self.assertEqual(in_bed_only, (3600.0, 0.0, 1))
         self.assertEqual(session_count, 1)
 
+    def test_missing_in_bed_records_remain_unknown_not_zero(self) -> None:
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute("UPDATE sleep_sessions SET in_bed_seconds = 0, in_bed_only = 0")
+            connection.commit()
+        with closing(open_health_database(self.database)) as connection:
+            window = resolve_window(
+                connection, period="custom", start="2024-01-02", end="2024-01-02"
+            )
+            sleep = sleep_summary(connection, window)
+        self.assertEqual(sleep["in_bed_nights"], 0)
+        self.assertEqual(sleep["in_bed_coverage_percent"], 0.0)
+        self.assertIsNone(sleep["total_in_bed_hours"])
+        self.assertIsNone(sleep["trend"][0]["in_bed_hours"])
+
     def test_sleep_unions_stages_and_assigns_wake_day(self) -> None:
         with closing(sqlite3.connect(self.database)) as connection:
             session = connection.execute(
@@ -239,6 +254,112 @@ class GoldenAggregationTests(unittest.TestCase):
         self.assertIn("blood_pressure_systolic", heart_keys)
         self.assertIn("blood_pressure_diastolic", heart_keys)
 
+    def test_insights_are_coverage_gated_and_non_causal(self) -> None:
+        start = date(2023, 12, 20)
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute("DELETE FROM daily_metrics WHERE metric_key IN ('steps', 'resting_heart_rate')")
+            for index in range(14):
+                day = (start + timedelta(days=index)).isoformat()
+                connection.execute(
+                    """
+                    INSERT INTO daily_metrics(
+                      metric_key, local_date, scope, source_key, value_sum, sample_count,
+                      covered_seconds, overlap_seconds, is_estimate
+                    ) VALUES ('steps', ?, 'combined', 0, ?, 1, 3600, 0, 0)
+                    """,
+                    (day, 1000 + index * 100),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO daily_metrics(
+                      metric_key, local_date, scope, source_key, value_mean, value_min,
+                      value_max, latest_value, latest_at, sample_count, covered_seconds,
+                      overlap_seconds, is_estimate
+                    ) VALUES ('resting_heart_rate', ?, 'combined', 0, ?, ?, ?, ?, ?, 1, 0, 0, 0)
+                    """,
+                    (day, 55 + index, 55 + index, 55 + index, 55 + index, f"{day}T08:00:00Z"),
+                )
+            connection.commit()
+
+        with closing(open_health_database(self.database)) as connection:
+            window = resolve_window(
+                connection, period="custom", start="2023-12-27", end="2024-01-02"
+            )
+            insights = insights_summary(connection, window, "metric")
+
+        by_key = {item["key"]: item for item in insights}
+        self.assertIn("period-steps", by_key)
+        self.assertIn("streak-steps", by_key)
+        correlation = by_key["correlation-steps-resting_heart_rate"]
+        self.assertEqual(correlation["sample_count"], 7)
+        self.assertEqual(correlation["coverage_percent"], 100.0)
+        self.assertEqual(correlation["sample_label"], "paired days")
+        self.assertEqual(correlation["note"], "Correlation does not imply causation.")
+        self.assertNotRegex(" ".join(item["text"] for item in insights), r"healthy|dangerous|caused")
+
+    def test_cumulative_insight_requires_matching_tracked_day_coverage(self) -> None:
+        start = date(2023, 12, 20)
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute("DELETE FROM daily_metrics WHERE metric_key = 'steps'")
+            connection.executemany(
+                """
+                INSERT INTO daily_metrics(
+                  metric_key, local_date, scope, source_key, value_sum, sample_count,
+                  covered_seconds, overlap_seconds, is_estimate
+                ) VALUES ('steps', ?, 'combined', 0, 1000, 1, 3600, 0, 0)
+                """,
+                (((start + timedelta(days=index)).isoformat(),) for index in range(14) if index != 2),
+            )
+            connection.commit()
+        with closing(open_health_database(self.database)) as connection:
+            window = resolve_window(
+                connection, period="custom", start="2023-12-27", end="2024-01-02"
+            )
+            insights = insights_summary(connection, window, "metric", category="activity")
+        self.assertNotIn("period-steps", {item["key"] for item in insights})
+
+    def test_sleep_average_uses_logged_nights_not_session_count(self) -> None:
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute(
+                """
+                INSERT INTO sleep_sessions(
+                  wake_date, start_utc, end_utc, asleep_seconds, in_bed_seconds,
+                  awake_seconds, core_seconds, deep_seconds, rem_seconds,
+                  unspecified_seconds, sample_count, source_count, in_bed_only
+                ) VALUES ('2024-01-02', '2024-01-02T13:00:00Z', '2024-01-02T14:00:00Z',
+                          3600, 3600, 0, 3600, 0, 0, 0, 1, 1, 0)
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO sleep_sessions(
+                  wake_date, start_utc, end_utc, asleep_seconds, in_bed_seconds,
+                  awake_seconds, core_seconds, deep_seconds, rem_seconds,
+                  unspecified_seconds, sample_count, source_count, in_bed_only
+                ) VALUES ('2024-01-03', '2024-01-02T23:00:00Z', '2024-01-03T07:00:00Z',
+                          0, 28800, 0, 0, 0, 0, 0, 1, 1, 1)
+                """
+            )
+            connection.commit()
+        with closing(open_health_database(self.database)) as connection:
+            window = resolve_window(
+                connection, period="custom", start="2024-01-02", end="2024-01-03"
+            )
+            sleep = sleep_summary(connection, window)
+        self.assertEqual(sleep["sessions"], 3)
+        self.assertEqual(sleep["logged_nights"], 2)
+        self.assertEqual(sleep["measured_nights"], 1)
+        self.assertEqual(sleep["average_asleep_hours"], 8.0)
+        self.assertEqual(sleep["trend"][0]["asleep_hours"], 8.0)
+        self.assertIsNone(sleep["trend"][1]["asleep_hours"])
+
+    def test_sparse_ranges_do_not_generate_insights(self) -> None:
+        with closing(open_health_database(self.database)) as connection:
+            window = resolve_window(
+                connection, period="custom", start="2024-01-02", end="2024-01-02"
+            )
+            self.assertEqual(insights_summary(connection, window, "metric"), [])
+
     def test_immediately_preceding_period_comparison(self) -> None:
         with closing(sqlite3.connect(self.database)) as connection:
             connection.execute(
@@ -261,6 +382,97 @@ class GoldenAggregationTests(unittest.TestCase):
         self.assertEqual(summary["comparison"]["percent"], 50.0)
         self.assertEqual(summary["comparison"]["basis"], "2024-01-01 to 2024-01-01")
 
+    def test_grouped_trends_use_calendar_bucket_boundaries(self) -> None:
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute("DELETE FROM daily_metrics WHERE metric_key = 'steps'")
+            connection.executemany(
+                """
+                INSERT INTO daily_metrics(
+                  metric_key, local_date, scope, source_key, value_sum, sample_count,
+                  covered_seconds, overlap_seconds, is_estimate
+                ) VALUES ('steps', ?, 'combined', 0, 1000, 1, 3600, 0, 0)
+                """,
+                (("2024-01-02",), ("2024-01-22",)),
+            )
+            connection.commit()
+        with closing(open_health_database(self.database)) as connection:
+            window = resolve_window(
+                connection, period="custom", start="2024-01-02", end="2024-01-22"
+            )
+            summary = metric_summary(connection, "steps", window, "metric", granularity="week")
+        self.assertEqual(
+            [(point["date"], point["end_date"]) for point in summary["trend"]],
+            [("2024-01-01", "2024-01-07"), ("2024-01-22", "2024-01-28")],
+        )
+
+    def test_in_bed_only_nights_do_not_qualify_sleep_correlations(self) -> None:
+        start = date(2024, 1, 1)
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute("DELETE FROM daily_metrics WHERE metric_key = 'steps'")
+            connection.execute("DELETE FROM sleep_stages")
+            connection.execute("DELETE FROM sleep_sessions")
+            for index in range(7):
+                day = (start + timedelta(days=index)).isoformat()
+                connection.execute(
+                    """
+                    INSERT INTO daily_metrics(
+                      metric_key, local_date, scope, source_key, value_sum, sample_count,
+                      covered_seconds, overlap_seconds, is_estimate
+                    ) VALUES ('steps', ?, 'combined', 0, ?, 1, 3600, 0, 0)
+                    """,
+                    (day, 1000 + index * 100),
+                )
+                asleep = 0 if index == 0 else (6 + index / 10) * 3600
+                connection.execute(
+                    """
+                    INSERT INTO sleep_sessions(
+                      wake_date, start_utc, end_utc, asleep_seconds, in_bed_seconds,
+                      awake_seconds, core_seconds, deep_seconds, rem_seconds,
+                      unspecified_seconds, sample_count, source_count, in_bed_only
+                    ) VALUES (?, ?, ?, ?, 28800, 0, 0, 0, 0, 0, 1, 1, ?)
+                    """,
+                    (day, f"{day}T00:00:00Z", f"{day}T08:00:00Z", asleep, int(asleep == 0)),
+                )
+            connection.commit()
+        with closing(open_health_database(self.database)) as connection:
+            window = resolve_window(
+                connection, period="custom", start="2024-01-01", end="2024-01-07"
+            )
+            insights = insights_summary(connection, window, "metric", category="sleep")
+        self.assertNotIn("correlation-steps-sleep", {item["key"] for item in insights})
+
+    def test_decimation_preserves_real_gaps_without_creating_artificial_ones(self) -> None:
+        start = date(2023, 1, 1)
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute("DELETE FROM daily_metrics WHERE metric_key = 'steps'")
+            connection.executemany(
+                """
+                INSERT INTO daily_metrics(
+                  metric_key, local_date, scope, source_key, value_sum, sample_count,
+                  covered_seconds, overlap_seconds, is_estimate
+                ) VALUES ('steps', ?, 'combined', 0, 1000, 1, 3600, 0, 0)
+                """,
+                (((start + timedelta(days=index)).isoformat(),) for index in range(300)),
+            )
+            connection.commit()
+        with closing(open_health_database(self.database)) as connection:
+            window = resolve_window(connection, period="all")
+            continuous = metric_summary(connection, "steps", window, "metric", granularity="day")
+        self.assertEqual(len(continuous["trend"]), 240)
+        self.assertFalse(any(point["gap_before"] for point in continuous["trend"]))
+
+        missing = (start + timedelta(days=150)).isoformat()
+        with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute(
+                "DELETE FROM daily_metrics WHERE metric_key = 'steps' AND local_date = ?",
+                (missing,),
+            )
+            connection.commit()
+        with closing(open_health_database(self.database)) as connection:
+            window = resolve_window(connection, period="all")
+            interrupted = metric_summary(connection, "steps", window, "metric", granularity="day")
+        self.assertTrue(any(point["gap_before"] for point in interrupted["trend"]))
+
     def test_trends_are_deterministically_limited(self) -> None:
         start = date(2023, 1, 1)
         with closing(sqlite3.connect(self.database)) as connection:
@@ -280,10 +492,13 @@ class GoldenAggregationTests(unittest.TestCase):
         with closing(open_health_database(self.database)) as connection:
             window = resolve_window(connection, period="all")
             summary = metric_summary(connection, "steps", window, "metric")
+            daily = metric_summary(connection, "steps", window, "metric", granularity="day")
 
-        self.assertEqual(len(summary["trend"]), 240)
-        self.assertEqual(summary["trend"][0]["date"], "2023-01-01")
-        self.assertEqual(summary["trend"][-1]["date"], "2024-01-02")
+        self.assertEqual(summary["granularity"], "week")
+        self.assertLess(len(summary["trend"]), 240)
+        self.assertEqual(len(daily["trend"]), 240)
+        self.assertEqual(daily["trend"][0]["date"], "2023-01-01")
+        self.assertEqual(daily["trend"][-1]["date"], "2024-01-02")
 
     def test_invalid_ranges_and_unknown_metrics_are_rejected(self) -> None:
         with closing(open_health_database(self.database)) as connection:
@@ -292,3 +507,5 @@ class GoldenAggregationTests(unittest.TestCase):
             window = resolve_window(connection, period="all")
             with self.assertRaisesRegex(AnalyticsError, "not supported"):
                 metric_summary(connection, "synthetic_unknown", window, "metric")
+            with self.assertRaisesRegex(AnalyticsError, "automatic chart grouping"):
+                metric_summary(connection, "steps", window, "metric", granularity="hour")

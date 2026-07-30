@@ -11,5 +11,13 @@
     <label><span>From</span><input type="date" name="start" value="{{ request.args.get('start', '') }}"></label>
     <label><span>To</span><input type="date" name="end" value="{{ request.args.get('end', '') }}"></label>
   </div>
+  <label>
+    <span>Group</span>
+    <select name="granularity">
+      {% for value, label in (("auto", "Automatic"), ("day", "Daily"), ("week", "Weekly"), ("month", "Monthly")) %}
+        <option value="{{ value }}"{% if selected_granularity == value %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
   <button type="submit">Apply</button>
 </form>
