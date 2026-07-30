@@ -26,7 +26,7 @@ Apple Health exports can contain dates of birth, clinical metadata, precise work
 
 | Phase | Status |
 |---|---|
-| 0 — Repository and privacy foundation | Complete locally; awaiting first push |
+| 0 — Repository and privacy foundation | Complete |
 | 1 — Local application shell | Not started |
 | 2 — Transactional import | Not started |
 | 3 — Metrics and aggregation | Not started |
