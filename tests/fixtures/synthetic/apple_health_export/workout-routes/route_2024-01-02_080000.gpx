@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Apple Health Data Viewer synthetic fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+ <metadata><name>Synthetic running route</name></metadata>
+ <trk><name>Synthetic running route</name><trkseg>
+  <trkpt lat="0.0010" lon="0.0010"><ele>10.0</ele><time>2024-01-02T08:00:00Z</time></trkpt>
+  <trkpt lat="0.0020" lon="0.0020"><ele>12.0</ele><time>2024-01-02T08:15:00Z</time></trkpt>
+  <trkpt lat="0.0030" lon="0.0015"><ele>11.0</ele><time>2024-01-02T08:30:00Z</time></trkpt>
+ </trkseg></trk>
+</gpx>

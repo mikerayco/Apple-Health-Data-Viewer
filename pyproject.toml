@@ -1,0 +1,27 @@
+[project]
+name = "apple-health-data-viewer"
+version = "0.0.0"
+description = "A private, local-first dashboard for Apple Health exports"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+  { name = "Mike Rayco" },
+]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/mikerayco/Apple-Health-Data-Viewer"
+Issues = "https://github.com/mikerayco/Apple-Health-Data-Viewer/issues"
+
+[tool.apple-health-data-viewer]
+phase = 0
+fixture-policy = "synthetic-only"

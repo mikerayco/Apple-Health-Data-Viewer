@@ -1,0 +1,44 @@
+# Version control and local tooling
+.git
+.gitignore
+.pi
+.vscode
+.idea
+.DS_Store
+
+# Private Apple Health and reference data
+apple-health-data
+from_claude
+apple_health_export
+**/apple_health_export
+**/export.xml
+!tests/fixtures/**/export.xml
+**/export_cda.xml
+**/workout-routes
+**/electrocardiograms
+*.zip
+*.pem
+*.key
+*.p12
+*.pfx
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+
+# App-managed and generated data
+app-data
+instance
+uploads
+imports
+benchmarks/private
+diagnostics
+*.log
+.coverage*
+htmlcov
+__pycache__
+*.py[cod]
+.venv
+venv
+build
+dist

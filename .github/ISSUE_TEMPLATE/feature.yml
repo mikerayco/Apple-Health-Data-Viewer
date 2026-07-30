@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest a focused product improvement
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include real health data, screenshots, exports, coordinates, or private paths.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful solution.
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy and offline implications
+      description: Does this affect local storage, network access, or sensitive output?
+    validations:
+      required: true

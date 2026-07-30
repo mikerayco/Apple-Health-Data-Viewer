@@ -1,0 +1,76 @@
+# Added by gitignore-maintenance
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Editor and local agent files
+.idea/
+.vscode/
+.pi/
+*.swp
+*.swo
+*~
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs
+*.log
+
+# Caches and temporary files
+.cache/
+*.tmp
+*.temp
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Private Apple Health sources and reference outputs
+/apple-health-data/
+/from_claude/
+/apple_health_export/
+**/apple_health_export/
+!tests/fixtures/synthetic/apple_health_export/
+!tests/fixtures/synthetic/apple_health_export/**
+export.xml
+export_cda.xml
+!tests/fixtures/**/export.xml
+!tests/fixtures/**/export_cda.xml
+/workout-routes/
+/electrocardiograms/
+*.zip
+
+# Local application data
+/app-data/
+/instance/
+/uploads/
+/imports/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+
+# Local benchmark and diagnostic output
+/benchmarks/private/
+/diagnostics/

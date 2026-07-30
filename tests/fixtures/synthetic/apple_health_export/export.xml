@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE HealthData [
+<!-- HealthKit Export Version: 14 -->
+<!ELEMENT HealthData (ExportDate,Me,(Record|Workout|ActivitySummary)*)>
+<!ELEMENT ExportDate EMPTY>
+<!ATTLIST ExportDate value CDATA #REQUIRED>
+<!ELEMENT Me EMPTY>
+<!ATTLIST Me
+  HKCharacteristicTypeIdentifierDateOfBirth CDATA #REQUIRED
+  HKCharacteristicTypeIdentifierBiologicalSex CDATA #REQUIRED
+  HKCharacteristicTypeIdentifierBloodType CDATA #REQUIRED
+  HKCharacteristicTypeIdentifierFitzpatrickSkinType CDATA #REQUIRED
+  HKCharacteristicTypeIdentifierCardioFitnessMedicationsUse CDATA #REQUIRED>
+<!ELEMENT Record (MetadataEntry*)>
+<!ATTLIST Record type CDATA #REQUIRED unit CDATA #IMPLIED value CDATA #IMPLIED
+  sourceName CDATA #REQUIRED sourceVersion CDATA #IMPLIED device CDATA #IMPLIED
+  creationDate CDATA #IMPLIED startDate CDATA #REQUIRED endDate CDATA #REQUIRED>
+<!ELEMENT MetadataEntry EMPTY>
+<!ATTLIST MetadataEntry key CDATA #REQUIRED value CDATA #REQUIRED>
+<!ELEMENT Workout (MetadataEntry|WorkoutEvent|WorkoutRoute|WorkoutStatistics)*>
+<!ATTLIST Workout workoutActivityType CDATA #REQUIRED duration CDATA #IMPLIED
+  durationUnit CDATA #IMPLIED sourceName CDATA #REQUIRED startDate CDATA #REQUIRED
+  endDate CDATA #REQUIRED>
+<!ELEMENT WorkoutEvent EMPTY>
+<!ATTLIST WorkoutEvent type CDATA #REQUIRED date CDATA #REQUIRED>
+<!ELEMENT WorkoutRoute (FileReference*)>
+<!ATTLIST WorkoutRoute sourceName CDATA #REQUIRED startDate CDATA #REQUIRED endDate CDATA #REQUIRED>
+<!ELEMENT FileReference EMPTY>
+<!ATTLIST FileReference path CDATA #REQUIRED>
+<!ELEMENT WorkoutStatistics EMPTY>
+<!ATTLIST WorkoutStatistics type CDATA #REQUIRED startDate CDATA #REQUIRED endDate CDATA #REQUIRED
+  average CDATA #IMPLIED minimum CDATA #IMPLIED maximum CDATA #IMPLIED sum CDATA #IMPLIED unit CDATA #IMPLIED>
+<!ELEMENT ActivitySummary EMPTY>
+<!ATTLIST ActivitySummary dateComponents CDATA #REQUIRED activeEnergyBurned CDATA #IMPLIED
+  activeEnergyBurnedGoal CDATA #IMPLIED activeEnergyBurnedUnit CDATA #IMPLIED
+  appleExerciseTime CDATA #IMPLIED appleExerciseTimeGoal CDATA #IMPLIED
+  appleStandHours CDATA #IMPLIED appleStandHoursGoal CDATA #IMPLIED>
+]>
+<HealthData locale="en_US">
+ <ExportDate value="2024-01-04 12:00:00 +0000"/>
+ <Me HKCharacteristicTypeIdentifierDateOfBirth="1990-01-01"
+     HKCharacteristicTypeIdentifierBiologicalSex="HKBiologicalSexNotSet"
+     HKCharacteristicTypeIdentifierBloodType="HKBloodTypeNotSet"
+     HKCharacteristicTypeIdentifierFitzpatrickSkinType="HKFitzpatrickSkinTypeNotSet"
+     HKCharacteristicTypeIdentifierCardioFitnessMedicationsUse="None"/>
+ <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Synthetic Watch" unit="count"
+     creationDate="2024-01-02 09:05:00 +0000" startDate="2024-01-02 08:00:00 +0000"
+     endDate="2024-01-02 09:00:00 +0000" value="1000">
+  <MetadataEntry key="HKMetadataKeySyncIdentifier" value="synthetic-watch-steps-1"/>
+ </Record>
+ <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Synthetic Phone" unit="count"
+     creationDate="2024-01-02 09:05:00 +0000" startDate="2024-01-02 08:00:00 +0000"
+     endDate="2024-01-02 09:00:00 +0000" value="800"/>
+ <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Synthetic Phone" unit="count"
+     creationDate="2024-01-02 10:05:00 +0000" startDate="2024-01-02 09:00:00 +0000"
+     endDate="2024-01-02 10:00:00 +0000" value="500"/>
+ <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Synthetic Watch" unit="count/min"
+     startDate="2024-01-02 07:00:00 +0000" endDate="2024-01-02 07:00:00 +0000" value="60"/>
+ <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" sourceName="Synthetic Watch" unit="ms"
+     startDate="2024-01-02 07:05:00 +0000" endDate="2024-01-02 07:05:00 +0000" value="50"/>
+ <Record type="HKQuantityTypeIdentifierBodyMass" sourceName="Synthetic Scale" unit="kg"
+     startDate="2024-01-02 07:10:00 +0000" endDate="2024-01-02 07:10:00 +0000" value="70"/>
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Synthetic Watch"
+     startDate="2024-01-01 23:00:00 +0000" endDate="2024-01-02 07:00:00 +0000"
+     value="HKCategoryValueSleepAnalysisInBed"/>
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Synthetic Watch"
+     startDate="2024-01-01 23:30:00 +0000" endDate="2024-01-02 03:30:00 +0000"
+     value="HKCategoryValueSleepAnalysisAsleepCore"/>
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Synthetic Watch"
+     startDate="2024-01-02 03:30:00 +0000" endDate="2024-01-02 05:00:00 +0000"
+     value="HKCategoryValueSleepAnalysisAsleepDeep"/>
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Synthetic Watch"
+     startDate="2024-01-02 05:00:00 +0000" endDate="2024-01-02 06:30:00 +0000"
+     value="HKCategoryValueSleepAnalysisAsleepREM"/>
+ <Workout workoutActivityType="HKWorkoutActivityTypeRunning" duration="30" durationUnit="min"
+     sourceName="Synthetic Watch" startDate="2024-01-02 08:00:00 +0000"
+     endDate="2024-01-02 08:30:00 +0000">
+  <WorkoutStatistics type="HKQuantityTypeIdentifierDistanceWalkingRunning"
+      startDate="2024-01-02 08:00:00 +0000" endDate="2024-01-02 08:30:00 +0000"
+      sum="5" unit="km"/>
+  <WorkoutRoute sourceName="Synthetic Watch" startDate="2024-01-02 08:00:00 +0000"
+      endDate="2024-01-02 08:30:00 +0000">
+   <FileReference path="workout-routes/route_2024-01-02_080000.gpx"/>
+  </WorkoutRoute>
+ </Workout>
+ <ActivitySummary dateComponents="2024-01-02" activeEnergyBurned="500"
+     activeEnergyBurnedGoal="600" activeEnergyBurnedUnit="kcal"
+     appleExerciseTime="30" appleExerciseTimeGoal="30"
+     appleStandHours="10" appleStandHoursGoal="12"/>
+</HealthData>
