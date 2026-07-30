@@ -43,7 +43,7 @@ class ApplicationShellTests(AppTestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.headers["Location"], "/setup")
 
-    def test_all_phase_one_pages_render(self) -> None:
+    def test_all_application_pages_render(self) -> None:
         for path in (
             "/setup",
             "/overview",
@@ -60,11 +60,12 @@ class ApplicationShellTests(AppTestCase):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 200)
                 self.assertIn(b"Apple Health Data Viewer", response.data)
+                self.assertIn(b"Not medical advice", response.data)
 
     def test_health_endpoint_is_minimal(self) -> None:
         response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json, {"phase": 2, "status": "ok", "version": "0.2.0"})
+        self.assertEqual(response.json, {"phase": 3, "status": "ok", "version": "0.3.0"})
         self.assertNotIn(str(self.data_dir).encode(), response.data)
 
     def test_security_headers_are_applied(self) -> None:

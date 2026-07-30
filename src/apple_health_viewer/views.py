@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 import shutil
 from typing import Any
@@ -10,6 +11,15 @@ import uuid
 from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
 from werkzeug.exceptions import SecurityError
 
+from .analytics import (
+    AnalyticsError,
+    category_summary,
+    metric_summary,
+    open_health_database,
+    overview_summary,
+    resolve_window,
+    sleep_summary,
+)
 from .database import (
     add_managed_source,
     delete_setting,
@@ -50,19 +60,19 @@ CATEGORY_PAGES = {
     "activity": {
         "title": "Activity",
         "eyebrow": "Movement over time",
-        "description": "Steps, distance, energy, exercise, flights, and stand time will live here.",
+        "description": "Source-aware steps, distance, energy, exercise, flights, and stand summaries.",
         "metrics": ("Steps", "Active energy", "Exercise", "Distance"),
     },
     "heart": {
         "title": "Vitals & Metabolic",
         "eyebrow": "Signals and measurements",
-        "description": "Heart, respiratory, oxygen, blood pressure, and blood glucose trends will live here.",
+        "description": "Heart, respiratory, oxygen, blood pressure, and blood glucose measurements with visible coverage.",
         "metrics": ("Resting HR", "HRV", "Blood glucose", "VO₂ max"),
     },
     "sleep": {
         "title": "Sleep",
         "eyebrow": "Rest and consistency",
-        "description": "Duration, stages, bedtime, wake time, and coverage—with missing nights kept visible.",
+        "description": "Duration, stages, wake-day sessions, and coverage—with missing nights kept visible.",
         "metrics": ("Time asleep", "In bed", "Consistency", "Nights logged"),
     },
     "body": {
@@ -140,6 +150,36 @@ def _page_context(active_page: str, **values: Any) -> dict[str, Any]:
 
 def _quality() -> dict[str, object] | None:
     return read_data_quality(_manager().active_database)
+
+
+def _date_parameters() -> dict[str, str | None]:
+    return {
+        "period": request.args.get("period", "30d"),
+        "start": request.args.get("start"),
+        "end": request.args.get("end"),
+    }
+
+
+def _filter_id(name: str) -> int | None:
+    value = request.args.get(name)
+    if value in {None, ""}:
+        return None
+    try:
+        return int(value)
+    except ValueError as error:
+        raise AnalyticsError("invalid_filter", f"Choose a valid {name}.") from error
+
+
+def _dashboard_data(kind: str) -> tuple[dict[str, object] | None, AnalyticsError | None]:
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            window = resolve_window(connection, **_date_parameters())
+            unit_system = _stored_setting("unit_system", "metric")
+            if kind == "overview":
+                return overview_summary(connection, window, unit_system), None
+            return category_summary(connection, kind, window, unit_system), None
+    except AnalyticsError as error:
+        return None, error
 
 
 def _start_import(source: SourceSpec):
@@ -355,7 +395,17 @@ def cancel_import(job_id: str):
 
 @web.get("/overview")
 def overview():
-    return render_template("overview.html", **_page_context("overview", quality=_quality()))
+    dashboard, analytics_error = _dashboard_data("overview")
+    return render_template(
+        "overview.html",
+        **_page_context(
+            "overview",
+            quality=_quality(),
+            dashboard=dashboard,
+            analytics_error=analytics_error,
+            selected_period=request.args.get("period", "30d"),
+        ),
+    )
 
 
 @web.get("/activity")
@@ -389,9 +439,19 @@ def ecgs():
 
 
 def _category(key: str, active_page: str):
+    dashboard = analytics_error = None
+    if key in {"activity", "heart", "sleep", "body"}:
+        dashboard, analytics_error = _dashboard_data(key)
     return render_template(
         "category.html",
-        **_page_context(active_page, page=CATEGORY_PAGES[key], quality=_quality()),
+        **_page_context(
+            active_page,
+            page=CATEGORY_PAGES[key],
+            quality=_quality(),
+            dashboard=dashboard,
+            analytics_error=analytics_error,
+            selected_period=request.args.get("period", "30d"),
+        ),
     )
 
 
@@ -402,6 +462,56 @@ def data_quality():
         "data_quality.html",
         **_page_context("data_quality", quality=quality),
     )
+
+
+@web.get("/api/overview")
+def overview_api():
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            window = resolve_window(connection, **_date_parameters())
+            return jsonify(
+                {
+                    "status": "ready",
+                    **overview_summary(connection, window, _stored_setting("unit_system", "metric")),
+                }
+            )
+    except AnalyticsError as error:
+        status = 409 if error.code in {"empty", "reimport_required", "no_supported_metrics"} else 400
+        return jsonify({"status": error.code, "message": error.public_message}), status
+
+
+@web.get("/api/metrics/<metric_key>")
+def metric_api(metric_key: str):
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            window = resolve_window(connection, **_date_parameters())
+            return jsonify(
+                {
+                    "status": "ready",
+                    **metric_summary(
+                        connection,
+                        metric_key,
+                        window,
+                        _stored_setting("unit_system", "metric"),
+                        source_id=_filter_id("source"),
+                        device_id=_filter_id("device"),
+                    ),
+                }
+            )
+    except AnalyticsError as error:
+        status = 404 if error.code == "unknown_metric" else 409 if error.code in {"empty", "reimport_required", "no_supported_metrics"} else 400
+        return jsonify({"status": error.code, "message": error.public_message}), status
+
+
+@web.get("/api/sleep")
+def sleep_api():
+    try:
+        with closing(open_health_database(_manager().active_database)) as connection:
+            window = resolve_window(connection, **_date_parameters())
+            return jsonify({"status": "ready", **sleep_summary(connection, window)})
+    except AnalyticsError as error:
+        status = 409 if error.code in {"empty", "reimport_required", "no_supported_metrics"} else 400
+        return jsonify({"status": error.code, "message": error.public_message}), status
 
 
 @web.get("/api/data-quality")
@@ -462,7 +572,7 @@ def cycle_theme():
 
 @web.get("/healthz")
 def healthz():
-    return jsonify({"status": "ok", "version": __version__, "phase": 2})
+    return jsonify({"status": "ok", "version": __version__, "phase": 3})
 
 
 @web.app_template_filter("bytesize")

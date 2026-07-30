@@ -26,8 +26,10 @@ Every Apple export is treated as a complete snapshot:
 2. stream `export.xml` into a new staging SQLite database;
 3. inventory linked files and unsupported types;
 4. remove exact duplicate records by deterministic fingerprint;
-5. create indexes and run SQLite integrity validation; and
-6. atomically replace the active health database only after success.
+5. normalize supported values, timestamps, and units;
+6. compute source-aware daily metrics and sleep sessions;
+7. create indexes and run SQLite integrity validation; and
+8. atomically replace the active health database only after success.
 
 A failure or cancellation removes only staging data. The previous active database remains unchanged. Full exports are never appended together.
 
@@ -43,16 +45,20 @@ Uploaded ZIPs/folders are retained by default. The import page shows their label
 
 Configured local paths are never copied or deleted by the app.
 
-## Data imported in Phase 2
+## Imported and calculated data
 
 - raw quantity/category records and metadata;
+- normalized supported values with original/local and UTC date semantics;
 - source and device provenance;
+- source-aware activity aggregates and visible overlap estimates;
+- measurement summaries and sleep sessions/stages;
+- blood glucose conversion and exported meal context without medical interpretation;
 - workouts, statistics, events, and route references;
 - activity summaries;
-- generic inventory for correlations and unsupported top-level content; and
+- supported child records from correlations plus inventory for correlation containers and unsupported top-level content; and
 - file inventory for GPX, ECG CSV, CDA, and other linked files.
 
-Phase 2 does not calculate medical metrics or source-overlap estimates. Blood glucose records are retained with their original units and meal metadata; conversion and trend calculations arrive in Phase 3.
+Snapshots created by version 0.2 require one complete re-import to build the Phase 3 normalized schema. The old active snapshot remains usable until that replacement succeeds.
 
 ## Safety limits
 

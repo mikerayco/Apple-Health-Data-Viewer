@@ -30,7 +30,7 @@
       <div class="sidebar-foot">
         <div class="privacy-status"><span aria-hidden="true"></span> Local only</div>
         <a href="{{ url_for('web.settings') }}" {% if active_page == 'settings' %}aria-current="page"{% endif %}>Settings</a>
-        <small>v{{ version }} · Phase 2</small>
+        <small>v{{ version }} · Phase 3</small>
       </div>
     </aside>
 
@@ -72,6 +72,7 @@
           {% endif %}
         {% endwith %}
         {% block content %}{% endblock %}
+        <footer class="medical-note">For personal data exploration only · Not medical advice or a diagnostic tool</footer>
       </main>
     </div>
   </div>

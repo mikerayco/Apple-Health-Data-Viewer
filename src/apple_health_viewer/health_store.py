@@ -13,9 +13,16 @@ from typing import BinaryIO, Callable, Iterable
 from urllib.parse import quote
 import xml.etree.ElementTree as ET
 
+from .metrics import (
+    METRICS_BY_IDENTIFIER,
+    SLEEP_IDENTIFIER,
+    AggregationCancelled,
+    build_aggregates,
+    normalize_record,
+)
 from .version import __version__
 
-HEALTH_SCHEMA_VERSION = 1
+HEALTH_SCHEMA_VERSION = 2
 BATCH_SIZE = 5_000
 HEADER_LIMIT = 1024 * 1024
 MAX_ATTRIBUTE_LENGTH = 64 * 1024
@@ -88,7 +95,14 @@ CREATE TABLE records (
   device_id INTEGER REFERENCES devices(id),
   creation_date TEXT,
   start_date TEXT NOT NULL,
-  end_date TEXT NOT NULL
+  end_date TEXT NOT NULL,
+  metric_key TEXT,
+  numeric_value REAL,
+  canonical_unit TEXT,
+  start_utc TEXT,
+  end_utc TEXT,
+  local_start_date TEXT,
+  local_end_date TEXT
 );
 
 CREATE TABLE record_metadata (
@@ -102,6 +116,63 @@ CREATE TABLE record_instantaneous_beats (
   record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,
   bpm TEXT NOT NULL,
   time TEXT NOT NULL
+);
+
+CREATE TABLE health_types (
+  metric_key TEXT PRIMARY KEY,
+  type_identifier TEXT NOT NULL UNIQUE,
+  display_label TEXT NOT NULL,
+  category TEXT NOT NULL,
+  value_kind TEXT NOT NULL,
+  canonical_unit TEXT NOT NULL,
+  metric_unit TEXT NOT NULL,
+  imperial_unit TEXT NOT NULL,
+  support_status TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE daily_metrics (
+  metric_key TEXT NOT NULL REFERENCES health_types(metric_key),
+  local_date TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK(scope IN ('combined', 'source', 'device')),
+  source_key INTEGER NOT NULL DEFAULT 0,
+  value_sum REAL,
+  value_mean REAL,
+  value_median REAL,
+  value_min REAL,
+  value_max REAL,
+  latest_value REAL,
+  latest_at TEXT,
+  sample_count INTEGER NOT NULL,
+  covered_seconds REAL NOT NULL DEFAULT 0,
+  overlap_seconds REAL NOT NULL DEFAULT 0,
+  is_estimate INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(metric_key, local_date, scope, source_key)
+) WITHOUT ROWID;
+
+CREATE TABLE sleep_sessions (
+  id INTEGER PRIMARY KEY,
+  wake_date TEXT NOT NULL,
+  start_utc TEXT NOT NULL,
+  end_utc TEXT NOT NULL,
+  asleep_seconds REAL NOT NULL,
+  in_bed_seconds REAL NOT NULL,
+  awake_seconds REAL NOT NULL,
+  core_seconds REAL NOT NULL,
+  deep_seconds REAL NOT NULL,
+  rem_seconds REAL NOT NULL,
+  unspecified_seconds REAL NOT NULL,
+  sample_count INTEGER NOT NULL,
+  source_count INTEGER NOT NULL,
+  in_bed_only INTEGER NOT NULL
+);
+
+CREATE TABLE sleep_stages (
+  session_id INTEGER NOT NULL REFERENCES sleep_sessions(id) ON DELETE CASCADE,
+  record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,
+  stage TEXT NOT NULL,
+  start_utc TEXT NOT NULL,
+  end_utc TEXT NOT NULL,
+  source_id INTEGER NOT NULL REFERENCES sources(id)
 );
 
 CREATE TABLE workouts (
@@ -199,6 +270,9 @@ CREATE TABLE import_issues (
 INDEXES = """
 CREATE INDEX records_type_start_idx ON records(type_identifier, start_date);
 CREATE INDEX records_source_idx ON records(source_id);
+CREATE INDEX records_metric_date_idx ON records(metric_key, local_start_date, start_utc);
+CREATE INDEX records_metric_value_idx ON records(metric_key, numeric_value);
+CREATE INDEX sleep_sessions_wake_idx ON sleep_sessions(wake_date);
 CREATE INDEX workouts_type_start_idx ON workouts(activity_type, start_date);
 """
 
@@ -397,6 +471,105 @@ def parse_export(
         issue_counts[(code, kind, identifier, message)] += 1
         warning_count += 1
 
+    def store_record(element: ET.Element, *, structural_child: bool = False) -> None:
+        nonlocal record_count, duplicate_count
+        attributes = {key: _bounded(value, key) or "" for key, value in element.attrib.items()}
+        identifier = attributes.get("type", "")
+        start = attributes.get("startDate", "")
+        end = attributes.get("endDate", "")
+        if not identifier or not start or not end:
+            add_issue(
+                "missing_record_field",
+                "Record",
+                identifier or "Unknown",
+                "A record was missing required attributes.",
+            )
+            return
+        metadata = _metadata(element)
+        fingerprint = _fingerprint(
+            "Record", attributes, [_element_payload(child) for child in element]
+        )
+        normalized = normalize_record(
+            identifier,
+            attributes.get("unit") or None,
+            attributes.get("value") or None,
+            start,
+            end,
+        )
+        if normalized.issue:
+            messages = {
+                "invalid_metric_timestamp": "A supported metric had an invalid timestamp.",
+                "invalid_metric_value": "A supported metric had a nonnumeric value.",
+                "unsupported_metric_unit": "A supported metric used an unknown unit and was preserved without aggregation.",
+            }
+            add_issue(normalized.issue, "Record", identifier, messages[normalized.issue])
+        cursor = connection.execute(
+            """
+            INSERT OR IGNORE INTO records(
+              fingerprint, type_identifier, unit, value, source_id, device_id,
+              creation_date, start_date, end_date, metric_key, numeric_value,
+              canonical_unit, start_utc, end_utc, local_start_date, local_end_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fingerprint,
+                identifier,
+                attributes.get("unit") or None,
+                attributes.get("value") or None,
+                source_id(attributes),
+                device_id(attributes),
+                attributes.get("creationDate") or None,
+                start,
+                end,
+                normalized.metric_key,
+                normalized.numeric_value,
+                normalized.canonical_unit,
+                normalized.start_utc,
+                normalized.end_utc,
+                normalized.local_start_date,
+                normalized.local_end_date,
+            ),
+        )
+        stored = bool(cursor.rowcount)
+        if stored:
+            record_id = int(cursor.lastrowid)
+            connection.executemany(
+                "INSERT OR IGNORE INTO record_metadata(record_id, key, value) VALUES (?, ?, ?)",
+                ((record_id, key, value) for key, value in metadata),
+            )
+            for child in element:
+                if _tag(child.tag) != "HeartRateVariabilityMetadataList":
+                    continue
+                connection.executemany(
+                    "INSERT INTO record_instantaneous_beats(record_id, bpm, time) VALUES (?, ?, ?)",
+                    (
+                        (
+                            record_id,
+                            _bounded(beat.get("bpm"), "instantaneous bpm") or "",
+                            _bounded(beat.get("time"), "instantaneous beat time") or "",
+                        )
+                        for beat in child
+                        if _tag(beat.tag) == "InstantaneousBeatsPerMinute"
+                    ),
+                )
+            record_count += 1
+        elif not structural_child:
+            duplicate_count += 1
+        support_status = (
+            "supported"
+            if identifier in METRICS_BY_IDENTIFIER or identifier == SLEEP_IDENTIFIER
+            else "imported_not_visualized"
+        )
+        count_type(
+            "Record",
+            identifier,
+            attributes.get("unit", ""),
+            start,
+            end,
+            stored,
+            support_status,
+        )
+
     try:
         parser = ET.iterparse(reader, events=("start", "end"))
         for event, element in parser:
@@ -421,61 +594,15 @@ def parse_export(
             elif top_level and tag == "Me":
                 profile_present = True
             elif top_level and tag == "Record":
-                attributes = {key: _bounded(value, key) or "" for key, value in element.attrib.items()}
-                identifier = attributes.get("type", "")
-                start = attributes.get("startDate", "")
-                end = attributes.get("endDate", "")
-                if not identifier or not start or not end:
-                    add_issue("missing_record_field", "Record", identifier or "Unknown", "A record was missing required attributes.")
-                else:
-                    metadata = _metadata(element)
-                    child_payload = [_element_payload(child) for child in element]
-                    fingerprint = _fingerprint("Record", attributes, child_payload)
-                    cursor = connection.execute(
-                        """
-                        INSERT OR IGNORE INTO records(
-                          fingerprint, type_identifier, unit, value, source_id, device_id,
-                          creation_date, start_date, end_date
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            fingerprint,
-                            identifier,
-                            attributes.get("unit") or None,
-                            attributes.get("value") or None,
-                            source_id(attributes),
-                            device_id(attributes),
-                            attributes.get("creationDate") or None,
-                            start,
-                            end,
-                        ),
-                    )
-                    stored = bool(cursor.rowcount)
-                    if stored:
-                        record_id = int(cursor.lastrowid)
-                        connection.executemany(
-                            "INSERT OR IGNORE INTO record_metadata(record_id, key, value) VALUES (?, ?, ?)",
-                            ((record_id, key, value) for key, value in metadata),
-                        )
-                        for child in element:
-                            if _tag(child.tag) != "HeartRateVariabilityMetadataList":
-                                continue
-                            connection.executemany(
-                                "INSERT INTO record_instantaneous_beats(record_id, bpm, time) VALUES (?, ?, ?)",
-                                (
-                                    (
-                                        record_id,
-                                        _bounded(beat.get("bpm"), "instantaneous bpm") or "",
-                                        _bounded(beat.get("time"), "instantaneous beat time") or "",
-                                    )
-                                    for beat in child
-                                    if _tag(beat.tag) == "InstantaneousBeatsPerMinute"
-                                ),
-                            )
-                        record_count += 1
-                    else:
-                        duplicate_count += 1
-                    count_type("Record", identifier, attributes.get("unit", ""), start, end, stored, "imported")
+                store_record(element)
+            elif top_level and tag == "Correlation":
+                for child in element:
+                    if _tag(child.tag) == "Record":
+                        store_record(child, structural_child=True)
+                identifier = _bounded(element.get("type"), "type") or "Correlation"
+                start = _bounded(element.get("startDate"), "start date")
+                end = _bounded(element.get("endDate"), "end date")
+                count_type("Correlation", identifier, "", start, end, False, "imported_not_visualized")
             elif top_level and tag == "Workout":
                 attributes = {key: _bounded(value, key) or "" for key, value in element.attrib.items()}
                 identifier = attributes.get("workoutActivityType", "")
@@ -653,6 +780,11 @@ def parse_export(
 
         progress(total_bytes, record_count + workout_count, "Indexing imported records")
         connection.executescript(INDEXES)
+        progress(total_bytes, record_count + workout_count, "Computing daily metrics")
+        try:
+            build_aggregates(connection, cancelled)
+        except AggregationCancelled as error:
+            raise ImportCancelled() from error
         fingerprint = hashing.digest.hexdigest()
         connection.execute(
             """

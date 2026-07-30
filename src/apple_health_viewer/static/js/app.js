@@ -28,6 +28,14 @@ if (menuButton && sidebar) {
   });
 }
 
+document.querySelectorAll("[data-period-select]").forEach((select) => {
+  const form = select.closest("form");
+  const custom = form?.querySelector("[data-custom-range]");
+  select.addEventListener("change", () => {
+    if (custom) custom.hidden = select.value !== "custom";
+  });
+});
+
 document.querySelectorAll("form[data-confirm]").forEach((form) => {
   form.addEventListener("submit", (event) => {
     if (!window.confirm(form.dataset.confirm)) event.preventDefault();

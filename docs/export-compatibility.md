@@ -21,9 +21,9 @@ Inventoried but not visualized in v1:
 | Export version | Fixture | Status |
 |---|---|---|
 | Synthetic HealthKit Export Version 14 subset | `tests/fixtures/synthetic/` | Streaming parser, exact dedup, source/workout/file inventory tested |
-| Private HealthKit Export Version 14, 2.18 GB XML | Local only; not committed | Full transactional import validated; see `performance.md` |
+| Private HealthKit Export Version 14, 2.18 GB XML | Local only; not committed | Full transactional import plus Phase 3 normalization/aggregation validated; see `performance.md` |
 
-Real exports are never committed. Phase 2 performs private local compatibility/performance validation without recording values, paths, coordinates, or screenshots. Add compatibility claims only after that validation and synthetic regression coverage.
+Real exports are never committed. Private local compatibility/performance validation records no values, paths, coordinates, or screenshots. Add compatibility claims only after that validation and synthetic regression coverage.
 
 ## Reporting a format change
 

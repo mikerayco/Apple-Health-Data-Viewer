@@ -50,7 +50,7 @@ class ImportManagerTests(unittest.TestCase):
         job = self.manager.start(SourceSpec("configured_path", FIXTURE, "Synthetic export"))
         result = self.manager.wait(job.id, timeout=10)
         self.assertEqual(result["status"], "succeeded")
-        self.assertEqual(result["result"]["record_count"], 11)
+        self.assertEqual(result["result"]["record_count"], 13)
         self.assertEqual(result["result"]["duplicate_count"], 1)
         self.assertTrue(self.manager.active_database.is_file())
         self.assertEqual(get_setting(self.app.config["SETTINGS_DATABASE"], "setup_complete"), "true")
@@ -184,9 +184,43 @@ class ImportRouteTests(unittest.TestCase):
         quality = self.client.get("/api/data-quality")
         self.assertEqual(quality.status_code, 200)
         self.assertEqual(quality.json["status"], "ready")
-        self.assertEqual(quality.json["manifest"]["record_count"], 11)
+        self.assertEqual(quality.json["manifest"]["record_count"], 13)
         page = self.client.get("/data-quality")
         self.assertIn(b"BloodGlucose", page.data)
+        overview = self.client.get("/api/overview?period=all")
+        self.assertEqual(overview.status_code, 200)
+        self.assertEqual(overview.json["status"], "ready")
+        steps = self.client.get(
+            "/api/metrics/steps?period=custom&start=2024-01-02&end=2024-01-02"
+        )
+        self.assertEqual(steps.json["value"], 1500.0)
+        self.assertEqual(steps.json["estimated_days"], 1)
+        sleep = self.client.get(
+            "/api/sleep?period=custom&start=2024-01-02&end=2024-01-02"
+        )
+        self.assertEqual(sleep.json["average_asleep_hours"], 7.0)
+        preference = self.client.post(
+            "/settings/preferences",
+            data={"csrf_token": self.token(), "theme": "system", "unit_system": "imperial"},
+        )
+        self.assertEqual(preference.status_code, 302)
+        body = self.client.get("/api/metrics/body_mass?period=all")
+        self.assertEqual(body.json["formatted_value"], "154.3 lb")
+        self.assertIn(b"Goal completion", self.client.get("/activity?period=all").data)
+        self.assertIn(b"Blood glucose", self.client.get("/heart?period=all").data)
+        self.assertIn(b"7.0 hr", self.client.get("/sleep?period=all").data)
+        self.assertIn(b"154.3 lb", self.client.get("/body?period=all").data)
+        dashboard = self.client.get("/overview?period=all")
+        self.assertIn(b"1,500 steps", dashboard.data)
+        self.assertEqual(self.client.get("/api/metrics/not-real?period=all").status_code, 404)
+        self.assertEqual(self.client.get("/api/overview?period=invalid").status_code, 400)
+        self.assertEqual(self.client.get("/api/metrics/steps?period=all&source=-1").status_code, 400)
+        self.assertEqual(
+            self.client.get("/api/metrics/steps?period=all&source=1&device=1").status_code,
+            400,
+        )
+        invalid_page = self.client.get("/overview?period=invalid")
+        self.assertIn(b"Adjust the selected range", invalid_page.data)
         self.assertEqual(self.client.get("/").headers["Location"], "/overview")
 
     def test_folder_upload_and_explicit_source_deletion(self) -> None:
@@ -226,3 +260,10 @@ class ImportRouteTests(unittest.TestCase):
     def test_empty_data_quality_api(self) -> None:
         response = self.client.get("/api/data-quality")
         self.assertEqual(response.json, {"status": "empty"})
+        overview = self.client.get("/api/overview")
+        self.assertEqual(overview.status_code, 409)
+        self.assertEqual(overview.json["status"], "empty")
+
+    def test_metric_api_rejects_unknown_metric_and_invalid_period(self) -> None:
+        self.assertEqual(self.client.get("/api/metrics/not-real").status_code, 409)
+        self.assertEqual(self.client.get("/api/overview?period=invalid").status_code, 409)

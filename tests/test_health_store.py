@@ -48,8 +48,15 @@ class HealthStoreTests(unittest.TestCase):
                 beats = connection.execute(
                     "SELECT bpm, time FROM record_instantaneous_beats ORDER BY time"
                 ).fetchall()
+                blood_pressure = connection.execute(
+                    """
+                    SELECT type_identifier, numeric_value FROM records
+                    WHERE metric_key IN ('blood_pressure_systolic', 'blood_pressure_diastolic')
+                    ORDER BY metric_key DESC
+                    """
+                ).fetchall()
 
-        self.assertEqual(result.record_count, 11)
+        self.assertEqual(result.record_count, 13)
         self.assertEqual(result.workout_count, 1)
         self.assertEqual(result.duplicate_count, 1)
         self.assertEqual(result.warning_count, 0)
@@ -59,10 +66,23 @@ class HealthStoreTests(unittest.TestCase):
         self.assertEqual(glucose, ("90", "mg/dL", "HKBloodGlucoseMealTime", "1"))
         self.assertEqual(route[0], "workout-routes/route_2024-01-02_080000.gpx")
         self.assertEqual(beats, [("60", "0.0"), ("62", "1.0")])
+        self.assertEqual(
+            blood_pressure,
+            [
+                ("HKQuantityTypeIdentifierBloodPressureSystolic", 120.0),
+                ("HKQuantityTypeIdentifierBloodPressureDiastolic", 80.0),
+            ],
+        )
         self.assertIsNotNone(quality)
-        self.assertEqual(quality["manifest"]["record_count"], 11)
+        self.assertEqual(quality["manifest"]["record_count"], 13)
+        self.assertEqual(quality["manifest"]["schema_version"], 2)
         identifiers = {item["type_identifier"] for item in quality["inventory"]}
         self.assertIn("HKQuantityTypeIdentifierBloodGlucose", identifiers)
+        glucose_inventory = next(
+            item for item in quality["inventory"]
+            if item["type_identifier"] == "HKQuantityTypeIdentifierBloodGlucose"
+        )
+        self.assertEqual(glucose_inventory["support_status"], "supported")
         file_kinds = {item["kind"]: item["count"] for item in quality["files"]}
         self.assertEqual(file_kinds["workout_route"], 1)
         self.assertEqual(file_kinds["electrocardiogram"], 1)

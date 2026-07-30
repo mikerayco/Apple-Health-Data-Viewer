@@ -52,6 +52,6 @@
 </section>
 {% endif %}
 
-<div class="method-note"><strong>Method note</strong><p>Phase 2 removes exact duplicates only. Source-overlap reconciliation and metric calculations—including blood glucose conversion—arrive in Phase 3.</p><span>Database {{ quality.database_bytes | bytesize }} · Exported {{ quality.manifest.export_date or "date unavailable" }}</span></div>
+<div class="method-note"><strong>Method note</strong><p>Exact duplicates are removed during import. Phase 3 normalizes supported units, preserves local-day semantics, and reconciles overlapping cumulative intervals with a labeled combined estimate.</p><span>Database {{ quality.database_bytes | bytesize }} · Exported {{ quality.manifest.export_date or "date unavailable" }}</span></div>
 {% endif %}
 {% endblock %}

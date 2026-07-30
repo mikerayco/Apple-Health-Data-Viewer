@@ -1,0 +1,15 @@
+<form class="range-picker" method="get" aria-label="Dashboard date range">
+  <label>
+    <span>Viewing</span>
+    <select name="period" data-period-select>
+      {% for value, label in (("7d", "Last 7 days"), ("30d", "Last 30 days"), ("90d", "Last 90 days"), ("1y", "Last year"), ("all", "All imported data"), ("custom", "Custom range")) %}
+        <option value="{{ value }}"{% if selected_period == value %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="custom-range"{% if selected_period != "custom" %} hidden{% endif %} data-custom-range>
+    <label><span>From</span><input type="date" name="start" value="{{ request.args.get('start', '') }}"></label>
+    <label><span>To</span><input type="date" name="end" value="{{ request.args.get('end', '') }}"></label>
+  </div>
+  <button type="submit">Apply</button>
+</form>

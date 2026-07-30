@@ -13,7 +13,7 @@ FIXTURE_ROOT = ROOT / "tests" / "fixtures" / "synthetic" / "apple_health_export"
 EXPORT_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE HealthData [
 <!-- HealthKit Export Version: 14 -->
-<!ELEMENT HealthData (ExportDate,Me,(Record|Workout|ActivitySummary)*)>
+<!ELEMENT HealthData (ExportDate,Me,(Record|Correlation|Workout|ActivitySummary)*)>
 <!ELEMENT ExportDate EMPTY>
 <!ATTLIST ExportDate value CDATA #REQUIRED>
 <!ELEMENT Me EMPTY>
@@ -29,6 +29,9 @@ EXPORT_XML = """<?xml version="1.0" encoding="UTF-8"?>
   creationDate CDATA #IMPLIED startDate CDATA #REQUIRED endDate CDATA #REQUIRED>
 <!ELEMENT MetadataEntry EMPTY>
 <!ATTLIST MetadataEntry key CDATA #REQUIRED value CDATA #REQUIRED>
+<!ELEMENT Correlation (Record*)>
+<!ATTLIST Correlation type CDATA #REQUIRED sourceName CDATA #REQUIRED sourceVersion CDATA #IMPLIED
+  device CDATA #IMPLIED creationDate CDATA #IMPLIED startDate CDATA #REQUIRED endDate CDATA #REQUIRED>
 <!ELEMENT HeartRateVariabilityMetadataList (InstantaneousBeatsPerMinute*)>
 <!ELEMENT InstantaneousBeatsPerMinute EMPTY>
 <!ATTLIST InstantaneousBeatsPerMinute bpm CDATA #REQUIRED time CDATA #REQUIRED>
@@ -64,11 +67,11 @@ EXPORT_XML = """<?xml version="1.0" encoding="UTF-8"?>
   <MetadataEntry key="HKMetadataKeySyncIdentifier" value="synthetic-watch-steps-1"/>
  </Record>
  <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Synthetic Phone" unit="count"
-     creationDate="2024-01-02 09:05:00 +0000" startDate="2024-01-02 08:00:00 +0000"
-     endDate="2024-01-02 09:00:00 +0000" value="800"/>
+     device="Synthetic Phone Device" creationDate="2024-01-02 09:05:00 +0000"
+     startDate="2024-01-02 08:00:00 +0000" endDate="2024-01-02 09:00:00 +0000" value="800"/>
  <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Synthetic Phone" unit="count"
-     creationDate="2024-01-02 10:05:00 +0000" startDate="2024-01-02 09:00:00 +0000"
-     endDate="2024-01-02 10:00:00 +0000" value="500"/>
+     device="Synthetic Phone Device" creationDate="2024-01-02 10:05:00 +0000"
+     startDate="2024-01-02 09:00:00 +0000" endDate="2024-01-02 10:00:00 +0000" value="500"/>
  <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Synthetic Watch" unit="count/min"
      startDate="2024-01-02 07:00:00 +0000" endDate="2024-01-02 07:00:00 +0000" value="60"/>
  <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" sourceName="Synthetic Watch" unit="ms"
@@ -84,6 +87,13 @@ EXPORT_XML = """<?xml version="1.0" encoding="UTF-8"?>
      startDate="2024-01-02 07:15:00 +0000" endDate="2024-01-02 07:15:00 +0000" value="90">
   <MetadataEntry key="HKBloodGlucoseMealTime" value="1"/>
  </Record>
+ <Correlation type="HKCorrelationTypeIdentifierBloodPressure" sourceName="Synthetic Cuff"
+     startDate="2024-01-02 07:20:00 +0000" endDate="2024-01-02 07:20:00 +0000">
+  <Record type="HKQuantityTypeIdentifierBloodPressureSystolic" sourceName="Synthetic Cuff" unit="mmHg"
+      startDate="2024-01-02 07:20:00 +0000" endDate="2024-01-02 07:20:00 +0000" value="120"/>
+  <Record type="HKQuantityTypeIdentifierBloodPressureDiastolic" sourceName="Synthetic Cuff" unit="mmHg"
+      startDate="2024-01-02 07:20:00 +0000" endDate="2024-01-02 07:20:00 +0000" value="80"/>
+ </Correlation>
  <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Synthetic Watch" unit="count"
      creationDate="2024-01-02 09:05:00 +0000" startDate="2024-01-02 08:00:00 +0000"
      endDate="2024-01-02 09:00:00 +0000" value="1000">

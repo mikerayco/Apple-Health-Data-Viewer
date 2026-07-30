@@ -525,9 +525,9 @@ Record hardware, fixture size, record count, parser version, elapsed time, peak 
 - [ ] Dashboard covers all confirmed categories and hides unavailable metrics cleanly.
 - [ ] Workout activity-type filtering and summaries work with unknown future types.
 - [ ] GPX route and ECG waveform views work without network access.
-- [ ] Date presets, custom range, and immediately preceding period comparison are consistent across pages.
-- [ ] Metric default and Imperial alternative produce tested conversions.
-- [ ] Missing-data, sparse-data, overlap, and support-status labels are visible.
+- [x] Date presets, custom range, and immediately preceding period comparison are consistent across implemented analytical pages.
+- [x] Metric default and Imperial alternative produce tested conversions.
+- [x] Missing-data, sparse-data, overlap, and support-status labels are visible.
 - [ ] Insights meet sample/coverage gates and make no diagnostic/causal claims.
 - [ ] No runtime request targets a non-loopback or third-party origin.
 - [ ] Server defaults to loopback, debug off, trusted hosts restricted, and CSP self-only.
