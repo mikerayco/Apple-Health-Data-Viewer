@@ -44,7 +44,36 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install locked dependencies and project
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.lock
+          python -m pip install --disable-pip-version-check --no-deps --no-build-isolation -e .
       - name: Compile Python sources
         run: python -m compileall -q src scripts tests
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+
+  docker:
+    name: Docker shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build image
+        run: docker build --tag apple-health-viewer:test .
+      - name: Start loopback-only container
+        run: docker run --detach --name apple-health-viewer --publish 127.0.0.1:8787:8787 apple-health-viewer:test
+      - name: Wait for health endpoint
+        run: |
+          for attempt in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:8787/healthz; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs apple-health-viewer
+          exit 1
+      - name: Stop container
+        if: always()
+        run: docker rm --force apple-health-viewer || true

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="A private, local-first Apple Health dashboard.">
+  <title>{% block title %}Apple Health Data Viewer{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="{{ url_for('web.index') }}" aria-label="Apple Health Data Viewer home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>Health</strong><small>Data Viewer</small></span>
+      </a>
+
+      <nav class="nav-list">
+        {% for endpoint, label, accent in navigation %}
+          <a href="{{ url_for('web.' + endpoint) }}" {% if active_page == endpoint %}aria-current="page"{% endif %}>
+            <span class="nav-signal signal-{{ accent }}" aria-hidden="true"></span>
+            <span>{{ label }}</span>
+          </a>
+        {% endfor %}
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="privacy-status"><span aria-hidden="true"></span> Local only</div>
+        <a href="{{ url_for('web.settings') }}" {% if active_page == 'settings' %}aria-current="page"{% endif %}>Settings</a>
+        <small>v{{ version }} · Phase 1</small>
+      </div>
+    </aside>
+
+    <div class="page-column">
+      <header class="topbar">
+        <button class="menu-button" type="button" data-menu-toggle aria-controls="sidebar" aria-expanded="false">
+          <span></span><span></span><span></span><span class="sr-only">Open navigation</span>
+        </button>
+        <div class="source-chip">
+          <span class="source-dot" aria-hidden="true"></span>
+          {% if source_name %}
+            <span><small>Source</small><strong>{{ source_name }}</strong></span>
+          {% else %}
+            <span><small>Source</small><strong>Not configured</strong></span>
+          {% endif %}
+        </div>
+        <div class="topbar-actions">
+          <span class="unit-chip">{{ "Metric" if unit_system == "metric" else "Imperial" }}</span>
+          <form method="post" action="{{ url_for('web.cycle_theme') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="theme" value="{{ next_theme }}">
+            <input type="hidden" name="next" value="{{ request.path }}">
+            <button class="theme-button" type="submit" aria-label="Current theme: {{ theme }}. Switch to {{ next_theme }} theme.">
+              <span class="theme-orbit" aria-hidden="true"></span>
+              <span>{{ theme | title }}</span>
+            </button>
+          </form>
+        </div>
+      </header>
+
+      <main id="main-content" tabindex="-1">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="messages" aria-live="polite">
+              {% for category, message in messages %}
+                <div class="message message-{{ category }}">{{ message }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+</body>
+</html>

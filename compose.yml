@@ -1,0 +1,16 @@
+services:
+  viewer:
+    build: .
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - viewer-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  viewer-data:

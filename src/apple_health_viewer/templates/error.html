@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}{{ status }} · Apple Health Data Viewer{% endblock %}
+{% block content %}
+<section class="error-page">
+  <span>{{ status }}</span><h1>That view slipped out of range.</h1><p>{{ message }}</p><a class="primary-button" href="{{ url_for('web.index') }}">Return home</a>
+</section>
+{% endblock %}

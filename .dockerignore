@@ -27,6 +27,9 @@ apple_health_export
 *.sqlite-*
 
 # App-managed and generated data
+.env
+.env.*
+!.env.example
 app-data
 instance
 uploads

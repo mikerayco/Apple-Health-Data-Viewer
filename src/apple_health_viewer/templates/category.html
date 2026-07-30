@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{{ page.title }} · Apple Health Data Viewer{% endblock %}
+{% block content %}
+<section class="page-head category-head">
+  <div><span class="eyebrow"><i></i> {{ page.eyebrow }}</span><h1>{{ page.title }}</h1><p>{{ page.description }}</p></div>
+  <div class="date-control"><span><small>Viewing</small><strong>Last 90 days</strong></span><button type="button" disabled>Change</button></div>
+</section>
+
+<section class="category-canvas">
+  <div class="category-metrics">
+    {% for metric in page.metrics %}
+      <article><small>{{ "%02d" | format(loop.index) }}</small><h2>{{ metric }}</h2><strong>—</strong><span>No imported data</span></article>
+    {% endfor %}
+  </div>
+  <div class="category-chart">
+    <div class="chart-header"><div><span>Trend</span><h2>Waiting for your first import</h2></div><span class="coverage-pill">0 days available</span></div>
+    <div class="chart-placeholder" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><i></i></div>
+    <div class="empty-action"><p>Once imported, this view will show available measurements and coverage—not invented zeroes.</p><a href="{{ url_for('web.setup') }}">Configure a source →</a></div>
+  </div>
+</section>
+{% endblock %}

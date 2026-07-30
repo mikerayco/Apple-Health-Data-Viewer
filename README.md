@@ -3,7 +3,7 @@
 A private, local-first web dashboard for exploring data exported from Apple Health.
 
 > [!IMPORTANT]
-> This project is under active development. Phase 0 established the repository, privacy controls, synthetic fixtures, and CI; the application is not usable yet.
+> This project is under active development. The Phase 1 application shell is usable, but Apple Health parsing and dashboard data arrive in later phases.
 
 ## Product goals
 
@@ -27,24 +27,57 @@ Apple Health exports can contain dates of birth, clinical metadata, precise work
 | Phase | Status |
 |---|---|
 | 0 — Repository and privacy foundation | Complete |
-| 1 — Local application shell | Not started |
+| 1 — Local application shell | Complete |
 | 2 — Transactional import | Not started |
 | 3 — Metrics and aggregation | Not started |
 | 4 — Dashboard and insights | Not started |
 | 5 — Workouts, routes, and ECG | Not started |
 | 6 — Hardening and public release | Not started |
 
-## Development checks
+## Quick start
 
 Requires Python 3.12 or newer.
 
+### macOS and Linux
+
 ```bash
-python3 scripts/generate_synthetic_fixtures.py --check
-python3 -m unittest discover -s tests -v
-python3 scripts/check_repository_privacy.py
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.lock
+python -m pip install --no-deps --no-build-isolation -e .
+apple-health-viewer
 ```
 
-No real health data is required for automated development or CI.
+### Windows PowerShell
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.lock
+python -m pip install --no-deps --no-build-isolation -e .
+apple-health-viewer
+```
+
+Open <http://127.0.0.1:8787>. See [`docs/configuration.md`](docs/configuration.md) for paths and environment variables.
+
+### Docker
+
+```bash
+docker compose up --build
+```
+
+Docker is optional; native execution remains the default. See [`docs/docker.md`](docs/docker.md).
+
+## Development checks
+
+```bash
+python scripts/generate_synthetic_fixtures.py --check
+python -m compileall -q src scripts tests
+python -m unittest discover -s tests -v
+python scripts/check_repository_privacy.py
+```
+
+No real health data is required for automated development or CI. Dependency decisions are documented in [`docs/dependencies.md`](docs/dependencies.md).
 
 ## Medical disclaimer
 

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Settings · Apple Health Data Viewer{% endblock %}
+{% block content %}
+<section class="page-head settings-head">
+  <div><span class="eyebrow"><i></i> Local preferences</span><h1>Settings</h1><p>Preferences and paths are stored only in your local settings database.</p></div>
+</section>
+
+<div class="settings-layout">
+  <form class="settings-card" method="post" action="{{ url_for('web.save_preferences') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="settings-title"><span>01</span><div><h2>Appearance and units</h2><p>Choose how the interface and future measurements are displayed.</p></div></div>
+    <fieldset>
+      <legend>Theme</legend>
+      <div class="choice-row">
+        {% for value in ("system", "light", "dark") %}
+          <label><input type="radio" name="theme" value="{{ value }}" {% if theme == value %}checked{% endif %}><span>{{ value | title }}</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Display units</legend>
+      <div class="choice-row two-choice">
+        <label><input type="radio" name="unit_system" value="metric" {% if unit_system == "metric" %}checked{% endif %}><span>Metric <small>kg · km · °C</small></span></label>
+        <label><input type="radio" name="unit_system" value="imperial" {% if unit_system == "imperial" %}checked{% endif %}><span>Imperial <small>lb · mi · °F</small></span></label>
+      </div>
+    </fieldset>
+    <button class="primary-button" type="submit">Save preferences</button>
+  </form>
+
+  <div class="settings-stack">
+    <section class="settings-card compact-settings">
+      <div class="settings-title"><span>02</span><div><h2>Data source</h2><p>{% if source_name %}<strong>{{ source_name }}</strong> is configured via {{ source_origin }}.{% else %}No Apple Health export is configured.{% endif %}</p></div></div>
+      <a class="secondary-button" href="{{ url_for('web.setup') }}">Manage source</a>
+    </section>
+    <section class="settings-card compact-settings">
+      <div class="settings-title"><span>03</span><div><h2>Local application</h2><p>Version {{ version }} · settings schema {{ schema_version }}</p></div></div>
+      <dl class="status-list"><div><dt>Network</dt><dd>Loopback only</dd></div><div><dt>Telemetry</dt><dd>None</dd></div><div><dt>Runtime assets</dt><dd>Local</dd></div></dl>
+    </section>
+  </div>
+</div>
+{% endblock %}

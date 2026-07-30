@@ -1,27 +1,44 @@
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "apple-health-data-viewer"
-version = "0.0.0"
+version = "0.1.0"
 description = "A private, local-first dashboard for Apple Health exports"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
+license-files = ["LICENSE"]
 authors = [
   { name = "Mike Rayco" },
 ]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
 ]
-dependencies = []
+dependencies = [
+  "Flask==3.1.3",
+]
+
+[project.scripts]
+apple-health-viewer = "apple_health_viewer.__main__:main"
 
 [project.urls]
 Repository = "https://github.com/mikerayco/Apple-Health-Data-Viewer"
 Issues = "https://github.com/mikerayco/Apple-Health-Data-Viewer/issues"
 
+[tool.setuptools.package-data]
+apple_health_viewer = [
+  "migrations/*.sql",
+  "static/css/*.css",
+  "static/js/*.js",
+  "templates/*.html",
+]
+
 [tool.apple-health-data-viewer]
-phase = 0
+phase = 1
 fixture-policy = "synthetic-only"

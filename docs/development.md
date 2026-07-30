@@ -6,17 +6,26 @@
 - Git
 - Docker only when working on optional container support
 
-Phase 0 intentionally has no third-party Python dependencies.
+Create an isolated environment and install the exact Phase 1 lock:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate  # Windows: .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.lock
+python -m pip install --no-deps --no-build-isolation -e .
+```
+
+See [`dependencies.md`](dependencies.md) for the maintenance review and accepted transitive risk.
 
 ## Checks
 
-Run the same fast checks used by CI:
+Run the same fast checks used by CI from the activated environment:
 
 ```bash
-python3 scripts/generate_synthetic_fixtures.py --check
-python3 -m compileall -q src scripts tests
-python3 -m unittest discover -s tests -v
-python3 scripts/check_repository_privacy.py
+python scripts/generate_synthetic_fixtures.py --check
+python -m compileall -q src scripts tests
+python -m unittest discover -s tests -v
+python scripts/check_repository_privacy.py
 ```
 
 Generate or refresh deterministic fixtures with:
