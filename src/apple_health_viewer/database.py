@@ -8,6 +8,8 @@ from pathlib import Path
 import sqlite3
 from typing import Iterator
 
+from .config import ensure_private_file
+
 DEFAULT_SETTINGS = {
     "theme": "system",
     "unit_system": "metric",
@@ -52,6 +54,7 @@ def init_database(path: str | Path) -> None:
                 "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
                 DEFAULT_SETTINGS.items(),
             )
+    ensure_private_file(database)
 
 
 def get_setting(path: str | Path, key: str, default: str | None = None) -> str | None:
@@ -77,6 +80,25 @@ def set_setting(path: str | Path, key: str, value: str) -> None:
 def delete_setting(path: str | Path, key: str) -> None:
     with closing(connect(path)) as connection, connection:
         connection.execute("DELETE FROM settings WHERE key = ?", (key,))
+
+
+def update_settings(path: str | Path, values: dict[str, str | None]) -> None:
+    """Apply a group of settings changes in one transaction."""
+    with closing(connect(path)) as connection, connection:
+        for key, value in values.items():
+            if value is None:
+                connection.execute("DELETE FROM settings WHERE key = ?", (key,))
+            else:
+                connection.execute(
+                    """
+                    INSERT INTO settings(key, value, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(key) DO UPDATE SET
+                      value = excluded.value,
+                      updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (key, value),
+                )
 
 
 def schema_version(path: str | Path) -> int:

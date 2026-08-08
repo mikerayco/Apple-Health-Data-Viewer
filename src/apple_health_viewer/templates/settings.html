@@ -32,10 +32,17 @@
       <div class="settings-title"><span>02</span><div><h2>Data and storage</h2><p>{% if source_name %}<strong>{{ source_name }}</strong> is active via {{ source_origin }}.{% else %}No Apple Health export is configured.{% endif %}</p></div></div>
       <dl class="status-list"><div><dt>Processed database</dt><dd>{{ health_bytes | bytesize }}</dd></div><div><dt>Retained sources</dt><dd>{{ retained_bytes | bytesize }}</dd></div><div><dt>Free space</dt><dd>{{ free_bytes | bytesize }}</dd></div></dl>
       <a class="secondary-button settings-source-link" href="{{ url_for('web.setup') }}">Manage imports</a>
+      {% if health_bytes %}
+        <form class="data-removal-form" method="post" action="{{ url_for('web.remove_processed_data') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label><input type="checkbox" name="confirmation" value="remove" required> I understand this removes the processed database. Retained uploads and preferences remain.</label>
+          <button class="danger-button" type="submit">Remove processed health data</button>
+        </form>
+      {% endif %}
     </section>
     <section class="settings-card compact-settings">
       <div class="settings-title"><span>03</span><div><h2>Local application</h2><p>Version {{ version }} · settings schema {{ schema_version }} · import phase</p></div></div>
-      <dl class="status-list"><div><dt>Network</dt><dd>Loopback only</dd></div><div><dt>Telemetry</dt><dd>None</dd></div><div><dt>Runtime assets</dt><dd>Local</dd></div></dl>
+      <dl class="status-list"><div><dt>Network</dt><dd>{{ "Loopback only" if loopback_only else "Exposed beyond loopback" }}</dd></div><div><dt>Telemetry</dt><dd>None</dd></div><div><dt>Runtime assets</dt><dd>Local</dd></div></dl>
     </section>
   </div>
 </div>

@@ -81,6 +81,16 @@ class MetricRegistryTests(unittest.TestCase):
             with self.assertRaisesRegex(AnalyticsError, "Re-import"):
                 open_health_database(database)
 
+    def test_newer_snapshot_requires_application_upgrade(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "health.sqlite3"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("CREATE TABLE manifest(id INTEGER PRIMARY KEY, schema_version INTEGER)")
+                connection.execute("INSERT INTO manifest VALUES (1, 999)")
+                connection.commit()
+            with self.assertRaisesRegex(AnalyticsError, "newer viewer"):
+                open_health_database(database)
+
     def test_invalid_value_unit_and_timezone_are_explicit(self) -> None:
         invalid_value = normalize_record(
             "HKQuantityTypeIdentifierBodyMass",

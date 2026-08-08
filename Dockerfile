@@ -2,7 +2,8 @@ FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TMPDIR=/data/tmp
 
 WORKDIR /app
 
@@ -13,8 +14,9 @@ RUN python -m pip install --no-cache-dir -r requirements.lock \
     && python -m pip install --no-cache-dir --no-deps --no-build-isolation . \
     && groupadd --system viewer \
     && useradd --system --gid viewer --home-dir /data viewer \
-    && mkdir -p /data \
-    && chown viewer:viewer /data
+    && mkdir -p /data/tmp \
+    && chown -R viewer:viewer /data \
+    && chmod 700 /data /data/tmp
 
 USER viewer
 EXPOSE 8787

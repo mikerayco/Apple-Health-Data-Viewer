@@ -39,8 +39,10 @@ The default address is `127.0.0.1:8787`. The app opens the system browser unless
 - Windows: `%LOCALAPPDATA%\Apple Health Data Viewer\`
 - Docker: `/data`
 
-Phase 1 stores `settings.sqlite3` and a generated `session.key`. The key protects the local session/CSRF cookie and should not be committed or shared.
+The directory stores `settings.sqlite3`, the generated `session.key`, `health.sqlite3`, upload/import staging under `imports/`, retained uploads under `imports/sources/`, and multipart temporary files under `tmp/`. POSIX installations restrict application directories to `0700` and sensitive databases/key files to `0600`; Windows uses the ACL inherited from `%LOCALAPPDATA%`.
+
+The session key protects the local session/CSRF cookie and must not be committed or shared. See [`privacy.md`](privacy.md) for selective removal and complete reset guidance.
 
 ## Network warning
 
-The supported default is loopback only. Binding to another interface can expose the unauthenticated application and future health data to the network. Do not change `AHV_HOST` unless you understand that risk. Remote access is outside the supported v1 security model.
+The supported default is loopback only. Binding to another interface can expose the unauthenticated application and health data to the network. A non-loopback configuration produces a console warning and a persistent warning on every page; it does not add authentication. Do not change `AHV_HOST` unless you understand that risk. Remote access is outside the supported v1 security model.

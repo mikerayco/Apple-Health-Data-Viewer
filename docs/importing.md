@@ -41,9 +41,9 @@ Only one import can run at a time. If the app stops during an import, the job is
 
 ## Retained uploads
 
-Uploaded ZIPs/folders are retained by default. The import page shows their labels and sizes and supports re-import. **Delete source** removes only that retained copy; the processed health database remains available.
+Uploaded ZIPs/folders are retained by default. The import page shows their labels and sizes and supports re-import. **Delete source** removes only that retained copy; the processed health database remains available. **Settings → Remove processed health data** removes only the active processed snapshot; retained uploads and preferences remain.
 
-Configured local paths are never copied or deleted by the app.
+Configured local paths are never copied or deleted by the app. For a complete reset, follow [`privacy.md`](privacy.md).
 
 ## Imported and calculated data
 

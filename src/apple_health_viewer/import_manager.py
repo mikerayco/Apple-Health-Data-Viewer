@@ -14,6 +14,8 @@ import uuid
 
 from flask import Flask
 
+from .analytics import register_database_lock
+from .config import ensure_private_directory, ensure_private_file
 from .database import (
     complete_import_activation,
     create_import,
@@ -23,6 +25,7 @@ from .database import (
     recover_interrupted_imports,
     set_setting,
     update_import,
+    update_settings,
 )
 from .health_store import HealthParseError, ImportCancelled, ParseResult, parse_export
 from .sources import SourceSpec, SourceValidationError, disk_usage, open_export
@@ -32,6 +35,10 @@ TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 
 
 class ImportBusyError(RuntimeError):
+    pass
+
+
+class ImportStartError(RuntimeError):
     pass
 
 
@@ -96,14 +103,38 @@ class ImportManager:
         self.sources_dir = self.imports_dir / "sources"
         self.active_database = self.data_dir / "health.sqlite3"
         self.previous_database = self.data_dir / "health.sqlite3.previous"
-        self.staging_dir.mkdir(parents=True, exist_ok=True)
-        self.sources_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(self.imports_dir)
+        ensure_private_directory(self.staging_dir)
+        ensure_private_directory(self.sources_dir)
         self._lock = threading.Lock()
+        self.database_lock = threading.RLock()
+        register_database_lock(self.active_database, self.database_lock)
         self._jobs: dict[str, ImportJob] = {}
         self._active_job: str | None = None
+        self._recover_interrupted_removal()
         self._recover_interrupted_activation()
         recover_interrupted_imports(self.settings_database)
         self._clean_stale_staging()
+
+    def _processed_paths(self) -> tuple[Path, ...]:
+        return (
+            self.data_dir / "health.sqlite3-journal",
+            self.data_dir / "health.sqlite3-wal",
+            self.data_dir / "health.sqlite3-shm",
+            self.previous_database,
+            self.active_database,
+        )
+
+    def _recover_interrupted_removal(self) -> None:
+        keep_active = get_setting(self.settings_database, "setup_complete", "false") == "true"
+        for original in self._processed_paths():
+            tombstone = original.with_name(f"{original.name}.removing")
+            if not tombstone.exists():
+                continue
+            if keep_active and not original.exists():
+                os.replace(tombstone, original)
+            else:
+                tombstone.unlink()
 
     def _recover_interrupted_activation(self) -> None:
         pending = get_setting(self.settings_database, "activation_pending")
@@ -149,13 +180,26 @@ class ImportManager:
                         if len(self._jobs) <= 20:
                             break
 
-        create_import(
-            self.settings_database,
-            job_id=job_id,
-            source_kind=source.kind,
-            source_label=source.label,
-            source_id=source.managed_id,
-        )
+        try:
+            create_import(
+                self.settings_database,
+                job_id=job_id,
+                source_kind=source.kind,
+                source_label=source.label,
+                source_id=source.managed_id,
+            )
+        except Exception as error:
+            self.app.logger.error("Import could not start because of %s", type(error).__name__)
+            job.update(
+                status="failed",
+                phase="Import could not start",
+                error_code="start_failed",
+                error_message="The import could not start. Check local storage and try again.",
+            )
+            with self._lock:
+                if self._active_job == job.id:
+                    self._active_job = None
+            raise ImportStartError("The import could not start.") from error
         thread = threading.Thread(
             target=self._run,
             args=(job,),
@@ -221,14 +265,61 @@ class ImportManager:
         fraction = min(bytes_read / total, 0.97)
         job.update(progress=fraction, processed_items=items, phase=phase)
 
+    def remove_processed_data(self) -> None:
+        """Remove replaceable health snapshots while retaining settings and source uploads."""
+        keys = (
+            "activation_pending",
+            "activation_had_previous",
+            "active_source_label",
+            "active_managed_source_id",
+            "setup_complete",
+        )
+        with self._lock:
+            if self._active_job:
+                active = self._jobs.get(self._active_job)
+                if active and active.status not in TERMINAL_STATUSES:
+                    raise ImportBusyError("Wait for the active import before removing processed data.")
+            previous_settings = {
+                key: get_setting(self.settings_database, key)
+                for key in keys
+            }
+            tombstones: list[tuple[Path, Path]] = []
+            with self.database_lock:
+                try:
+                    for original in self._processed_paths():
+                        if not original.exists():
+                            continue
+                        tombstone = original.with_name(f"{original.name}.removing")
+                        os.replace(original, tombstone)
+                        tombstones.append((original, tombstone))
+                    update_settings(
+                        self.settings_database,
+                        {
+                            "activation_pending": None,
+                            "activation_had_previous": None,
+                            "active_source_label": None,
+                            "active_managed_source_id": None,
+                            "setup_complete": "false",
+                        },
+                    )
+                    for _original, tombstone in tombstones:
+                        tombstone.unlink()
+                except Exception:
+                    for original, tombstone in reversed(tombstones):
+                        if tombstone.exists() and not original.exists():
+                            os.replace(tombstone, original)
+                    update_settings(self.settings_database, previous_settings)
+                    raise
+                _fsync_directory(self.data_dir)
+
     def _run(self, job: ImportJob) -> None:
         stage = self.staging_dir / job.id
         staged_database = stage / "health.sqlite3"
-        stage.mkdir(parents=True, exist_ok=False)
-        job.update(status="running", phase="Validating source")
-        update_import(self.settings_database, job.id, status="running", parser_version=__version__)
 
         try:
+            ensure_private_directory(stage)
+            job.update(status="running", phase="Validating source")
+            update_import(self.settings_database, job.id, status="running", parser_version=__version__)
             with open_export(job.source) as opened:
                 job.update(total_bytes=opened.total_bytes, phase="Checking available disk space")
                 free, _total = disk_usage(self.data_dir)
@@ -278,8 +369,10 @@ class ImportManager:
                 "true" if had_previous else "false",
             )
             set_setting(self.settings_database, "activation_pending", job.id)
+            self.database_lock.acquire()
             try:
                 os.replace(staged_database, self.active_database)
+                ensure_private_file(self.active_database)
                 _fsync_directory(self.data_dir)
                 database_bytes = self.active_database.stat().st_size
                 complete_import_activation(
@@ -307,6 +400,8 @@ class ImportManager:
                 except sqlite3.Error:
                     pass
                 raise
+            finally:
+                self.database_lock.release()
             if self.previous_database.is_file():
                 try:
                     self.previous_database.unlink()
@@ -315,8 +410,7 @@ class ImportManager:
                     pass
             job.update(status="succeeded", phase="Import complete", progress=1.0, result=result)
         except ImportCancelled:
-            update_import(
-                self.settings_database,
+            self._update_history(
                 job.id,
                 status="cancelled",
                 finished_at=_now(),
@@ -329,8 +423,7 @@ class ImportManager:
                 error_message="The import was cancelled. The previous database is unchanged.",
             )
         except (SourceValidationError, HealthParseError) as error:
-            update_import(
-                self.settings_database,
+            self._update_history(
                 job.id,
                 status="failed",
                 finished_at=_now(),
@@ -344,8 +437,7 @@ class ImportManager:
             )
         except Exception as error:  # Keep private paths and values out of logs and UI.
             self.app.logger.error("Import failed with unexpected %s", type(error).__name__)
-            update_import(
-                self.settings_database,
+            self._update_history(
                 job.id,
                 status="failed",
                 finished_at=_now(),
@@ -362,6 +454,12 @@ class ImportManager:
             with self._lock:
                 if self._active_job == job.id:
                     self._active_job = None
+
+    def _update_history(self, job_id: str, **values: object) -> None:
+        try:
+            update_import(self.settings_database, job_id, **values)
+        except sqlite3.Error as error:
+            self.app.logger.error("Import history update failed with %s", type(error).__name__)
 
 
 def _fsync_directory(path: Path) -> None:

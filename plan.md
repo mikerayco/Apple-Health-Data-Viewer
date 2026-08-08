@@ -1,6 +1,6 @@
 # Apple Health Viewer — Project Plan
 
-**Status:** Proposed
+**Status:** Phase 6 in progress
 **Date:** 2026-07-30
 **Target:** Local-first v1, public repository, macOS/Linux/Windows
 
@@ -514,7 +514,7 @@ Record hardware, fixture size, record count, parser version, elapsed time, peak 
 
 ## 11. v1 acceptance checklist
 
-- [ ] Native setup documented and tested on macOS, Windows, and Linux.
+- [x] Native setup documented and tested on macOS, Windows, and Linux.
 - [x] Docker Compose is optional and documented; native remains primary.
 - [x] ZIP upload, folder upload, configured path, and UI local-path import work.
 - [x] Multi-gigabyte XML import is streaming and bounded-memory.
@@ -522,19 +522,19 @@ Record hardware, fixture size, record count, parser version, elapsed time, peak 
 - [x] Successful complete re-import atomically replaces health data while retaining settings.
 - [x] App-managed uploads are retained by default, disk usage is visible, and deleting a retained source leaves processed data usable.
 - [x] Configured-path imports do not duplicate the source.
-- [ ] Dashboard covers all confirmed categories and hides unavailable metrics cleanly.
-- [ ] Workout activity-type filtering and summaries work with unknown future types.
-- [ ] GPX route and ECG waveform views work without network access.
+- [x] Dashboard covers all confirmed categories and hides unavailable metrics cleanly.
+- [x] Workout activity-type filtering and summaries work with unknown future types.
+- [x] GPX route and ECG waveform views work without network access.
 - [x] Date presets, custom range, and immediately preceding period comparison are consistent across implemented analytical pages.
 - [x] Metric default and Imperial alternative produce tested conversions.
 - [x] Missing-data, sparse-data, overlap, and support-status labels are visible.
-- [ ] Insights meet sample/coverage gates and make no diagnostic/causal claims.
-- [ ] No runtime request targets a non-loopback or third-party origin.
-- [ ] Server defaults to loopback, debug off, trusted hosts restricted, and CSP self-only.
+- [x] Insights meet sample/coverage gates and make no diagnostic/causal claims.
+- [x] No runtime request targets a non-loopback or third-party origin.
+- [x] Server defaults to loopback, debug off, trusted hosts restricted, and CSP self-only.
 - [ ] Accessibility review meets WCAG 2.2 AA targets.
 - [ ] Synthetic test suite and cross-platform CI pass.
-- [ ] Dependency, license, vulnerability, and repository privacy scans pass.
-- [ ] No private Apple Health data or Claude-generated personal derivative is tracked.
+- [x] Dependency, license, vulnerability, and repository privacy scans pass.
+- [x] No private Apple Health data or Claude-generated personal derivative is tracked.
 
 ## 12. Risks and mitigations
 

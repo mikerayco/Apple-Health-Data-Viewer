@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from contextlib import closing
 from pathlib import Path
+import os
 import sqlite3
+import stat
 import tempfile
 import unittest
 
@@ -65,7 +67,7 @@ class ApplicationShellTests(AppTestCase):
     def test_health_endpoint_is_minimal(self) -> None:
         response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json, {"phase": 5, "status": "ok", "version": "0.5.0"})
+        self.assertEqual(response.json, {"phase": 6, "status": "ok", "version": "0.6.0"})
         self.assertNotIn(str(self.data_dir).encode(), response.data)
 
     def test_security_headers_are_applied(self) -> None:
@@ -97,6 +99,33 @@ class ApplicationShellTests(AppTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"form expired", response.data)
 
+    def test_cross_origin_post_is_rejected_before_form_validation(self) -> None:
+        response = self.client.post(
+            "/settings/preferences",
+            headers={"Origin": "https://attacker.invalid", "Sec-Fetch-Site": "cross-site"},
+            data={"theme": "dark", "unit_system": "metric"},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_non_loopback_binding_has_persistent_warning(self) -> None:
+        app = create_app(
+            {
+                "TESTING": True,
+                "DATA_DIR": self.data_dir,
+                "SECRET_KEY": "synthetic-test-secret",
+                "HOST": "0.0.0.0",
+            }
+        )
+        response = app.test_client().get("/settings")
+        self.assertIn(b"Network exposure enabled", response.data)
+        self.assertIn(b"Exposed beyond loopback", response.data)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permissions only")
+    def test_application_storage_is_private(self) -> None:
+        self.assertEqual(stat.S_IMODE(self.data_dir.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(self.database.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE((self.data_dir / "imports").stat().st_mode), 0o700)
+
     def test_preferences_are_saved_and_rendered(self) -> None:
         token = self.authorize_form()
         response = self.client.post(
@@ -118,6 +147,32 @@ class ApplicationShellTests(AppTestCase):
         )
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.headers["Location"], "/overview")
+
+    def test_processed_health_data_removal_requires_confirmation(self) -> None:
+        manager = self.app.extensions["import_manager"]
+        manager.active_database.write_bytes(b"synthetic processed data")
+        set_setting(self.database, "setup_complete", "true")
+        set_setting(self.database, "active_source_label", "Synthetic export")
+        token = self.authorize_form()
+
+        rejected = self.client.post(
+            "/settings/data/remove",
+            data={"csrf_token": token},
+            follow_redirects=True,
+        )
+        self.assertTrue(manager.active_database.exists())
+        self.assertIn(b"Confirm that you want", rejected.data)
+
+        removed = self.client.post(
+            "/settings/data/remove",
+            data={"csrf_token": token, "confirmation": "remove"},
+            follow_redirects=True,
+        )
+        self.assertEqual(removed.status_code, 200)
+        self.assertFalse(manager.active_database.exists())
+        self.assertEqual(get_setting(self.database, "setup_complete"), "false")
+        self.assertIsNone(get_setting(self.database, "active_source_label"))
+        self.assertIn(b"Processed health data removed", removed.data)
 
 
 class SourceConfigurationTests(AppTestCase):

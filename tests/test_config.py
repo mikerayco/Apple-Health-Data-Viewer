@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from apple_health_viewer import create_app
 from apple_health_viewer.config import DEFAULT_HOST, DEFAULT_PORT, base_config
@@ -65,6 +67,16 @@ class ConfigurationTests(unittest.TestCase):
             base_config({"AHV_PORT": "not-a-port"})
         with self.assertRaisesRegex(ValueError, "between 1 and 65535"):
             base_config({"AHV_PORT": "70000"})
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permissions only")
+    def test_application_refuses_unrestricted_data_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            Path,
+            "chmod",
+            side_effect=OSError("synthetic chmod failure"),
+        ):
+            with self.assertRaisesRegex(PermissionError, "permissions"):
+                create_app({"TESTING": True, "DATA_DIR": Path(directory) / "data"})
 
     def test_explicit_overrides_take_precedence_and_secret_persists(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

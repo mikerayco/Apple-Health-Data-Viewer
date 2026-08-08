@@ -149,6 +149,37 @@ class HealthStoreTests(unittest.TestCase):
                         cancelled=lambda: False,
                     )
 
+    def test_oversized_xml_attribute_is_rejected_before_parsing(self) -> None:
+        xml = b'<HealthData><Record type="' + b"x" * (129 * 1024) + b'"/></HealthData>'
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(HealthParseError, "tag or text"):
+                parse_export(
+                    BytesIO(xml),
+                    Path(directory) / "health.sqlite3",
+                    total_bytes=len(xml),
+                    source_files=[],
+                    progress=lambda *_: None,
+                    cancelled=lambda: False,
+                )
+
+    def test_excessive_xml_depth_is_rejected(self) -> None:
+        xml = (
+            b"<HealthData>"
+            + b"<Nested>" * 64
+            + b"</Nested>" * 64
+            + b"</HealthData>"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(HealthParseError, "structural safety"):
+                parse_export(
+                    BytesIO(xml),
+                    Path(directory) / "health.sqlite3",
+                    total_bytes=len(xml),
+                    source_files=[],
+                    progress=lambda *_: None,
+                    cancelled=lambda: False,
+                )
+
     def test_cancellation_is_checked_during_streaming(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "health.sqlite3"

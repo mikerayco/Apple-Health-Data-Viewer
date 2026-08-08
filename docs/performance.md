@@ -2,6 +2,31 @@
 
 Private compatibility benchmarks record only sizes, counts, elapsed time, peak memory, and software/hardware versions. They never record health values, dates, source/device names, coordinates, screenshots, or private paths.
 
+> Phase 6 release status: the generated v0.6 benchmark below is current. A private-reference rerun—including route/ECG response checks—is still required by the [release checklist](release-checklist.md) before v1.
+
+## Phase 6 generated benchmark
+
+**Date:** 2026-08-08
+
+**Application:** 0.6.0, health schema 3
+
+**Machine:** Apple silicon arm64, macOS 26.5.2
+
+**Runtime:** CPython 3.13.1
+
+**Command:** `python scripts/benchmark_synthetic.py --records 100000 --max-seconds 120 --max-query-ms 500`
+
+| Measure | Result |
+|---|---:|
+| Generated XML size | 18,100,134 bytes |
+| Requested/stored records | 100,000 / 100,000 |
+| Completed database size | 47,976,448 bytes |
+| Import elapsed time | 14.825 seconds |
+| Peak traced Python heap | 2,689,041 bytes |
+| Overview query, all time | 2.201 ms |
+
+The generator writes invented step records directly to a temporary XML file and reports only structural/performance metadata. Traced Python heap does not include all SQLite/native allocations and must not be presented as process RSS. Results are regression evidence for this machine, not a performance guarantee.
+
 ## Phase 2 full-export import
 
 **Date:** 2026-07-30

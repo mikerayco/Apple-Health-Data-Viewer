@@ -20,6 +20,10 @@ MAX_ECG_METADATA_FIELDS = 256
 MAX_ECG_METADATA_LENGTH = 64 * 1024
 MAX_ECG_ROW_CHARACTERS = 1024 * 1024
 MAX_ECG_COLUMNS = 32
+MAX_ROUTE_XML_DEPTH = 64
+MAX_ROUTE_POINT_ELEMENTS = 256
+MAX_GPX_TOKEN_BYTES = 128 * 1024
+XML_DECLARATION_MARKERS = (b"<!DOCTYPE", b"<!ENTITY")
 
 
 class AssetParseError(ValueError):
@@ -66,25 +70,53 @@ class _BoundedTextLines:
         return line
 
 
-class _PrefixedStream:
+class _SafeXMLStream:
     def __init__(self, prefix: bytes, stream: BinaryIO) -> None:
         self.prefix = memoryview(prefix)
         self.offset = 0
         self.stream = stream
+        self.tail = b""
+        self.in_tag = False
+        self.quote: int | None = None
+        self.token_bytes = 0
 
     def read(self, size: int = -1) -> bytes:
         remaining = len(self.prefix) - self.offset
         if size < 0:
-            head = self.prefix[self.offset :].tobytes()
+            data = self.prefix[self.offset :].tobytes() + self.stream.read()
             self.offset = len(self.prefix)
-            return head + self.stream.read()
-        if remaining >= size:
+        elif remaining >= size:
             data = self.prefix[self.offset : self.offset + size].tobytes()
             self.offset += size
-            return data
-        head = self.prefix[self.offset :].tobytes()
-        self.offset = len(self.prefix)
-        return head + self.stream.read(size - len(head))
+        else:
+            data = self.prefix[self.offset :].tobytes() + self.stream.read(size - remaining)
+            self.offset = len(self.prefix)
+        inspected = (self.tail + data).upper()
+        if any(marker in inspected for marker in XML_DECLARATION_MARKERS):
+            raise AssetParseError("unsafe_gpx", "A route file contains unsupported XML declarations.")
+        self.tail = inspected[-16:]
+        for byte in data:
+            if self.in_tag:
+                self.token_bytes += 1
+                if self.quote is not None:
+                    if byte == self.quote:
+                        self.quote = None
+                elif byte in {ord('"'), ord("'")}:
+                    self.quote = byte
+                elif byte == ord(">"):
+                    self.in_tag = False
+                    self.token_bytes = 0
+            elif byte == ord("<"):
+                self.in_tag = True
+                self.token_bytes = 1
+            else:
+                self.token_bytes += 1
+            if self.token_bytes > MAX_GPX_TOKEN_BYTES:
+                raise AssetParseError(
+                    "oversized_gpx_token",
+                    "A route XML tag or text value exceeds the safety limit.",
+                )
+        return data
 
 
 def _tag(value: str) -> str:
@@ -122,8 +154,8 @@ def parse_gpx_into(
     """Stream a linked GPX file into route tables while retaining every valid point."""
     prefix = stream.read(64 * 1024)
     upper = prefix.upper()
-    if b"<!ENTITY" in upper or b" SYSTEM " in upper or b" PUBLIC " in upper:
-        raise AssetParseError("unsafe_gpx", "A route file contains unsupported external XML declarations.")
+    if any(marker in upper for marker in XML_DECLARATION_MARKERS):
+        raise AssetParseError("unsafe_gpx", "A route file contains unsupported XML declarations.")
 
     connection.execute("SAVEPOINT route_asset")
     existing = connection.execute(
@@ -154,22 +186,32 @@ def parse_gpx_into(
     stack: list[ET.Element] = []
     active_point: ET.Element | None = None
     parser_events = 0
+    point_elements = 0
     try:
         for event, element in ET.iterparse(
-            _PrefixedStream(prefix, stream), events=("start", "end")
+            _SafeXMLStream(prefix, stream), events=("start", "end")
         ):
             parser_events += 1
             if parser_events % 2000 == 0 and cancelled():
                 raise AssetImportCancelled()
             tag = _tag(element.tag)
             if event == "start":
+                if len(stack) >= MAX_ROUTE_XML_DEPTH:
+                    raise AssetParseError("gpx_too_deep", "A route file exceeds the structural safety limit.")
                 stack.append(element)
+                if active_point is not None:
+                    point_elements += 1
+                    if point_elements > MAX_ROUTE_POINT_ELEMENTS:
+                        raise AssetParseError("gpx_point_too_complex", "A route point contains too much nested data.")
                 if tag == "trkseg":
                     segment_index += 1
                     previous_coordinates = None
                     previous_elevation = None
                 elif tag == "trkpt":
+                    if active_point is not None:
+                        raise AssetParseError("invalid_gpx", "A route file contains nested track points.")
                     active_point = element
+                    point_elements = 1
                     if segment_index < 0:
                         segment_index = 0
                 continue

@@ -7,10 +7,32 @@ from datetime import date, timedelta
 import math
 from pathlib import Path
 import sqlite3
-from typing import Iterable
+import threading
+from typing import Any, Iterable
 from urllib.parse import quote
 
 from .metrics import CATEGORIES, METRICS, MetricDefinition, display_value, format_value, normalize_record
+from .version import HEALTH_SCHEMA_VERSION
+
+_DATABASE_LOCKS: dict[Path, Any] = {}
+_DATABASE_LOCKS_GUARD = threading.Lock()
+
+
+class _LockedHealthConnection(sqlite3.Connection):
+    viewer_lock: Any = None
+
+    def close(self) -> None:
+        lock, self.viewer_lock = self.viewer_lock, None
+        try:
+            super().close()
+        finally:
+            if lock is not None:
+                lock.release()
+
+
+def register_database_lock(path: Path, lock: Any) -> None:
+    with _DATABASE_LOCKS_GUARD:
+        _DATABASE_LOCKS[path.resolve()] = lock
 
 
 class AnalyticsError(ValueError):
@@ -44,19 +66,43 @@ class DateWindow:
 
 
 def open_health_database(path: Path) -> sqlite3.Connection:
+    resolved = path.resolve()
+    with _DATABASE_LOCKS_GUARD:
+        lock = _DATABASE_LOCKS.get(resolved)
+    if lock is not None:
+        lock.acquire()
     if not path.is_file():
+        if lock is not None:
+            lock.release()
         raise AnalyticsError("empty", "Import an Apple Health export first.")
-    uri = f"file:{quote(path.resolve().as_posix(), safe='/:')}?mode=ro"
-    connection = sqlite3.connect(uri, uri=True)
+    uri = f"file:{quote(resolved.as_posix(), safe='/:')}?mode=ro"
+    try:
+        connection = sqlite3.connect(uri, uri=True, factory=_LockedHealthConnection)
+    except Exception:
+        if lock is not None:
+            lock.release()
+        raise
+    connection.viewer_lock = lock
     connection.row_factory = sqlite3.Row
     try:
         version = connection.execute("SELECT schema_version FROM manifest WHERE id = 1").fetchone()
     except sqlite3.DatabaseError as error:
         connection.close()
         raise AnalyticsError("invalid_database", "The active health database could not be read.") from error
-    if not version or int(version[0]) < 2:
+    try:
+        schema = int(version[0]) if version else 0
+    except (TypeError, ValueError):
+        connection.close()
+        raise AnalyticsError("invalid_database", "The active health database could not be read.")
+    if schema < 2:
         connection.close()
         raise AnalyticsError("reimport_required", "Re-import the source to compute Phase 3 metrics.")
+    if schema > HEALTH_SCHEMA_VERSION:
+        connection.close()
+        raise AnalyticsError(
+            "newer_database",
+            "This health database was created by a newer viewer. Upgrade the application to open it.",
+        )
     return connection
 
 

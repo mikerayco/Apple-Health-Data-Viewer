@@ -140,6 +140,45 @@ class GPXAssetTests(unittest.TestCase):
         self.assertIsNone(route[2])
         self.assertEqual(segments, [0, 0, 1, 1])
 
+    def test_large_valid_public_metadata_is_not_treated_as_a_declaration(self) -> None:
+        metadata = b"x" * (70 * 1024) + b" PUBLIC PARK "
+        gpx = (
+            b"<gpx><metadata><description>" + metadata + b"</description></metadata><trk><trkseg>"
+            b'<trkpt lat="0" lon="0"/><trkpt lat="0" lon="0.001"/>'
+            b"</trkseg></trk></gpx>"
+        )
+        with tempfile.TemporaryDirectory() as directory, closing(
+            create_health_database(Path(directory) / "health.sqlite3")
+        ) as connection:
+            connection.execute("PRAGMA foreign_keys = OFF")
+            result = parse_gpx_into(connection, 1, "workout-routes/public.gpx", BytesIO(gpx))
+        self.assertEqual(result.point_count, 2)
+
+    def test_oversized_gpx_attribute_is_rejected(self) -> None:
+        gpx = b'<gpx><trk><trkseg><trkpt lat="' + b"0" * (129 * 1024) + b'" lon="0"/></trkseg></trk></gpx>'
+        with tempfile.TemporaryDirectory() as directory, closing(
+            create_health_database(Path(directory) / "health.sqlite3")
+        ) as connection:
+            connection.execute("PRAGMA foreign_keys = OFF")
+            with self.assertRaisesRegex(AssetParseError, "tag or text"):
+                parse_gpx_into(connection, 1, "workout-routes/oversized.gpx", BytesIO(gpx))
+
+    def test_delayed_gpx_doctype_is_rejected(self) -> None:
+        gpx = (
+            b'<?xml version="1.0"?>\n'
+            + b" " * (70 * 1024)
+            + b'<!DOCTYPE gpx [<!ENTITY synthetic "blocked">]><gpx><trk><trkseg>'
+            + b'<trkpt lat="0" lon="0"/><trkpt lat="0" lon="0.001"/>'
+            + b"</trkseg></trk></gpx>"
+        )
+        with tempfile.TemporaryDirectory() as directory, closing(
+            create_health_database(Path(directory) / "health.sqlite3")
+        ) as connection:
+            connection.execute("PRAGMA foreign_keys = OFF")
+            with self.assertRaisesRegex(AssetParseError, "declarations"):
+                parse_gpx_into(connection, 1, "workout-routes/unsafe.gpx", BytesIO(gpx))
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workout_routes").fetchone()[0], 0)
+
     def test_malformed_gpx_rolls_back_flushed_points(self) -> None:
         points = "".join(f'<trkpt lat="0" lon="{index / 10000}"/>' for index in range(1001))
         gpx = f"<gpx><trk><trkseg>{points}".encode()

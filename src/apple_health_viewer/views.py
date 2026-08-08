@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import closing
 from pathlib import Path
 import shutil
+import sqlite3
 from typing import Any
 import uuid
 
@@ -35,7 +36,7 @@ from .database import (
     set_setting,
 )
 from .health_store import read_data_quality
-from .import_manager import ImportBusyError, ImportManager
+from .import_manager import ImportBusyError, ImportManager, ImportStartError
 from .security import csrf_protected
 from .sources import (
     SourceSpec,
@@ -153,13 +154,16 @@ def _page_context(active_page: str, **values: Any) -> dict[str, Any]:
         "unit_system": unit_system,
         "source_name": source_label or (source.name if source else None),
         "source_origin": source_origin,
+        "loopback_only": str(current_app.config["HOST"]) in {"127.0.0.1", "localhost", "::1", "[::1]"},
         "version": __version__,
         **values,
     }
 
 
 def _quality() -> dict[str, object] | None:
-    return read_data_quality(_manager().active_database)
+    manager = _manager()
+    with manager.database_lock:
+        return read_data_quality(manager.active_database)
 
 
 def _date_parameters() -> dict[str, str | None]:
@@ -222,6 +226,9 @@ def _start_import(source: SourceSpec):
         job = _manager().start(source)
     except ImportBusyError:
         flash("Another import is already running.", "warning")
+        return redirect(url_for("web.setup"))
+    except ImportStartError:
+        flash("The import could not start. Check local storage and try again.", "error")
         return redirect(url_for("web.setup"))
     return redirect(url_for("web.import_progress", job_id=job.id))
 
@@ -838,6 +845,24 @@ def settings():
     )
 
 
+@web.post("/settings/data/remove")
+@csrf_protected
+def remove_processed_data():
+    if request.form.get("confirmation") != "remove":
+        flash("Confirm that you want to remove the processed health database.", "warning")
+        return redirect(url_for("web.settings"))
+    try:
+        _manager().remove_processed_data()
+    except ImportBusyError:
+        flash("Wait for the active import before removing processed data.", "warning")
+        return redirect(url_for("web.settings"))
+    except (OSError, sqlite3.Error):
+        flash("The processed database could not be removed. Close other local viewer windows and try again.", "error")
+        return redirect(url_for("web.settings"))
+    flash("Processed health data removed. Retained sources and preferences were not deleted.", "success")
+    return redirect(url_for("web.setup"))
+
+
 @web.post("/settings/preferences")
 @csrf_protected
 def save_preferences():
@@ -870,7 +895,7 @@ def cycle_theme():
 
 @web.get("/healthz")
 def healthz():
-    return jsonify({"status": "ok", "version": __version__, "phase": 5})
+    return jsonify({"status": "ok", "version": __version__, "phase": 6})
 
 
 @web.app_template_filter("bytesize")

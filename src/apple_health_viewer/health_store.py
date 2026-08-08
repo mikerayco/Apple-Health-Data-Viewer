@@ -26,12 +26,14 @@ from .metrics import (
     parse_health_datetime,
 )
 from .sources import SourceValidationError
-from .version import __version__
+from .version import HEALTH_SCHEMA_VERSION, __version__
 
-HEALTH_SCHEMA_VERSION = 3
 BATCH_SIZE = 5_000
 HEADER_LIMIT = 1024 * 1024
 MAX_ATTRIBUTE_LENGTH = 64 * 1024
+MAX_XML_TOKEN_BYTES = 128 * 1024
+MAX_XML_DEPTH = 64
+MAX_ELEMENT_CHILDREN = 100_000
 
 
 class ImportCancelled(RuntimeError):
@@ -364,6 +366,41 @@ class _HashingReader:
         return data
 
 
+class _BoundedXMLReader:
+    """Reject oversized XML tags or text before ElementTree materializes them."""
+
+    def __init__(self, stream: _PrefixedReader) -> None:
+        self.stream = stream
+        self.in_tag = False
+        self.quote: int | None = None
+        self.token_bytes = 0
+
+    def read(self, size: int = -1) -> bytes:
+        data = self.stream.read(size)
+        for byte in data:
+            if self.in_tag:
+                self.token_bytes += 1
+                if self.quote is not None:
+                    if byte == self.quote:
+                        self.quote = None
+                elif byte in {ord('"'), ord("'")}:
+                    self.quote = byte
+                elif byte == ord(">"):
+                    self.in_tag = False
+                    self.token_bytes = 0
+            elif byte == ord("<"):
+                self.in_tag = True
+                self.token_bytes = 1
+            else:
+                self.token_bytes += 1
+            if self.token_bytes > MAX_XML_TOKEN_BYTES:
+                raise HealthParseError(
+                    "oversized_xml_token",
+                    "An XML tag or text value exceeds the structural safety limit.",
+                )
+        return data
+
+
 class _PrefixedReader:
     def __init__(self, prefix: bytes, stream: _HashingReader) -> None:
         self.prefix = memoryview(prefix)
@@ -497,7 +534,7 @@ def parse_export(
         if export_version_match
         else None
     )
-    reader = _PrefixedReader(prefix, hashing)
+    reader = _BoundedXMLReader(_PrefixedReader(prefix, hashing))
 
     connection = create_health_database(database_path)
     source_cache: dict[tuple[str, str], int] = {}
@@ -513,6 +550,7 @@ def parse_export(
     profile_present = False
     elements_seen = 0
     stack: list[str] = []
+    child_counts: list[int] = []
     root_element: ET.Element | None = None
 
     def source_id(attributes: dict[str, str]) -> int:
@@ -678,7 +716,14 @@ def parse_export(
         for event, element in parser:
             tag = _tag(element.tag)
             if event == "start":
+                if len(stack) >= MAX_XML_DEPTH:
+                    raise HealthParseError("xml_too_deep", "The export XML exceeds the structural safety limit.")
+                if child_counts and stack[-1] != "HealthData":
+                    child_counts[-1] += 1
+                    if child_counts[-1] > MAX_ELEMENT_CHILDREN:
+                        raise HealthParseError("xml_too_wide", "An export XML element has too many children.")
                 stack.append(tag)
+                child_counts.append(0)
                 if len(stack) == 1 and tag != "HealthData":
                     raise HealthParseError("invalid_root", "The XML root is not HealthData.")
                 if len(stack) == 1:
@@ -898,6 +943,7 @@ def parse_export(
                 if root_element is not None:
                     root_element.clear()
             stack.pop()
+            child_counts.pop()
 
             if elements_seen % BATCH_SIZE == 0:
                 connection.commit()

@@ -8,6 +8,7 @@ import re
 import sqlite3
 
 from .analytics import AnalyticsError, DateWindow
+from .version import HEALTH_SCHEMA_VERSION
 
 WORKOUT_LABELS = {
     "HKWorkoutActivityTypeRunning": "Running",
@@ -33,6 +34,11 @@ def require_phase_five(connection: sqlite3.Connection) -> None:
     row = connection.execute("SELECT schema_version FROM manifest WHERE id = 1").fetchone()
     if not row or int(row[0]) < 3:
         raise AnalyticsError("reimport_required", "Re-import the source to parse workouts, routes, and ECGs.")
+    if int(row[0]) > HEALTH_SCHEMA_VERSION:
+        raise AnalyticsError(
+            "newer_database",
+            "This health database was created by a newer viewer. Upgrade the application to open it.",
+        )
 
 
 def workout_label(identifier: str) -> str:

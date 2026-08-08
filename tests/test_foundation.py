@@ -5,10 +5,12 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 import xml.etree.ElementTree as ET
 
-from scripts.check_repository_privacy import scan
+from apple_health_viewer.version import __version__
+from scripts.check_repository_privacy import scan, scan_history
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = ROOT / "tests" / "fixtures" / "synthetic" / "apple_health_export"
@@ -95,6 +97,71 @@ class RepositorySafetyTests(unittest.TestCase):
         self.assertIn((Path("health.sqlite"), "private archive/database/credential file type"), reasons)
         self.assertIn((Path("local.key"), "private archive/database/credential file type"), reasons)
 
+    def test_unexpected_fixture_files_are_not_trusted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            extra = root / "tests/fixtures/synthetic/private-real-ecg.csv"
+            extra.parent.mkdir(parents=True)
+            extra.write_text("Name,Private Person\n", encoding="utf-8")
+            findings = scan(root, [extra])
+        self.assertIn(
+            (Path("tests/fixtures/synthetic/private-real-ecg.csv"), "unexpected synthetic fixture file"),
+            {(finding.path, finding.reason) for finding in findings},
+        )
+
+    def test_history_scanner_checks_every_path_for_shared_blobs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", root], check=True)
+            (root / "safe.txt").write_text("same synthetic blob", encoding="utf-8")
+            (root / "health.sqlite").write_text("same synthetic blob", encoding="utf-8")
+            subprocess.run(["git", "-C", root, "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", root,
+                    "-c", "user.name=Synthetic Test",
+                    "-c", "user.email=synthetic@example.invalid",
+                    "commit", "-q", "-m", "Synthetic fixture",
+                ],
+                check=True,
+            )
+            findings, _count = scan_history(root)
+        self.assertIn(
+            (Path("health.sqlite"), "private archive/database/credential file type"),
+            {(finding.path, finding.reason) for finding in findings},
+        )
+
+    def test_history_scanner_checks_pathless_binary_blobs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", root], check=True)
+            (root / "safe.txt").write_text("synthetic", encoding="utf-8")
+            subprocess.run(["git", "-C", root, "add", "."], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", root,
+                    "-c", "user.name=Synthetic Test",
+                    "-c", "user.email=synthetic@example.invalid",
+                    "commit", "-q", "-m", "Synthetic fixture",
+                ],
+                check=True,
+            )
+            blob = subprocess.run(
+                ["git", "-C", root, "hash-object", "-w", "--stdin"],
+                input=b"SQLite format 3\x00\xffsynthetic",
+                check=True,
+                capture_output=True,
+            ).stdout.decode().strip()
+            subprocess.run(
+                ["git", "-C", root, "update-ref", "refs/tags/pathless-private", blob],
+                check=True,
+            )
+            findings, _count = scan_history(root)
+        self.assertIn(
+            (Path(f".git-object/{blob}"), "SQLite database signature"),
+            {(finding.path, finding.reason) for finding in findings},
+        )
+
     def test_private_workspace_paths_are_ignored(self) -> None:
         private_paths = [
             "apple-health-data/export.xml",
@@ -122,6 +189,10 @@ class RepositorySafetyTests(unittest.TestCase):
         license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
         self.assertIn("MIT License", license_text)
         self.assertIn("Copyright (c) 2026 Mike Rayco", license_text)
+
+    def test_package_and_runtime_versions_match(self) -> None:
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(project["project"]["version"], __version__)
 
 
 if __name__ == "__main__":

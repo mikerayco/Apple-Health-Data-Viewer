@@ -13,14 +13,16 @@ jobs:
     name: Repository safety
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
       - name: Verify deterministic synthetic fixtures
         run: python scripts/generate_synthetic_fixtures.py --check
-      - name: Scan repository candidates for private data
-        run: python scripts/check_repository_privacy.py
+      - name: Scan repository and full Git history for private data
+        run: python scripts/check_repository_privacy.py --history
 
   tests:
     name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
@@ -40,8 +42,8 @@ jobs:
             python: "3.12"
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -54,12 +56,15 @@ jobs:
         run: python -m compileall -q src scripts tests
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+      - name: Run synthetic performance smoke test
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14'
+        run: python scripts/benchmark_synthetic.py --records 10000 --max-seconds 30 --max-query-ms 500
 
   docker:
     name: Docker shell
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build image
         run: docker build --tag apple-health-viewer:test .
       - name: Start loopback-only container

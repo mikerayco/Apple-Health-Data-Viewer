@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import secrets
+import stat
 from typing import Any, Mapping
 
 from flask import Flask
@@ -14,6 +15,28 @@ from .paths import normalize_path, platform_data_dir
 ENV_PREFIX = "AHV_"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
+
+
+def ensure_private_directory(path: Path) -> None:
+    """Create a sensitive data directory with restrictive POSIX permissions."""
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name == "posix":
+        try:
+            path.chmod(0o700)
+        except OSError as error:
+            raise PermissionError("Application data permissions could not be restricted.") from error
+        if stat.S_IMODE(path.stat().st_mode) != 0o700:
+            raise PermissionError("Application data permissions could not be restricted.")
+
+
+def ensure_private_file(path: Path) -> None:
+    if os.name == "posix":
+        try:
+            path.chmod(0o600)
+        except OSError as error:
+            raise PermissionError("Application data permissions could not be restricted.") from error
+        if stat.S_IMODE(path.stat().st_mode) != 0o600:
+            raise PermissionError("Application data permissions could not be restricted.")
 
 
 def _env_bool(value: str | None, default: bool) -> bool:
@@ -37,22 +60,23 @@ def _env_port(value: str | None) -> int:
 def _load_or_create_secret(data_dir: Path) -> str:
     path = data_dir / "session.key"
     try:
-        return path.read_text(encoding="utf-8").strip()
+        value = path.read_text(encoding="utf-8").strip()
+        ensure_private_file(path)
+        return value
     except FileNotFoundError:
         pass
 
-    data_dir.mkdir(parents=True, exist_ok=True)
+    ensure_private_directory(data_dir)
     value = secrets.token_urlsafe(48)
     try:
         with path.open("x", encoding="utf-8") as file:
             file.write(value)
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
+        ensure_private_file(path)
         return value
     except FileExistsError:
-        return path.read_text(encoding="utf-8").strip()
+        value = path.read_text(encoding="utf-8").strip()
+        ensure_private_file(path)
+        return value
 
 
 def base_config(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -85,8 +109,11 @@ def configure_app(app: Flask, overrides: Mapping[str, Any]) -> None:
     app.config.from_mapping(overrides)
 
     data_dir = normalize_path(app.config["DATA_DIR"])
-    data_dir.mkdir(parents=True, exist_ok=True)
+    ensure_private_directory(data_dir)
+    upload_temp_dir = data_dir / "tmp"
+    ensure_private_directory(upload_temp_dir)
     app.config["DATA_DIR"] = data_dir
+    app.config["UPLOAD_TEMP_DIR"] = upload_temp_dir
     app.config["SETTINGS_DATABASE"] = data_dir / "settings.sqlite3"
 
     source = app.config.get("HEALTH_DATA_PATH")

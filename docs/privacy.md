@@ -31,19 +31,27 @@ Only deterministic synthetic fixtures under `tests/fixtures/` are allowed.
 
 Private exports may be used locally for compatibility and performance checks if they remain ignored or outside the repository. The application and test tooling must open configured exports read-only. Private benchmark reports may record file size, record count, elapsed time, peak memory, and database size, but not health values or coordinates.
 
-Before any public push, run:
+Before any public push, run from a full clone:
 
 ```bash
-python3 scripts/check_repository_privacy.py
+python3 scripts/check_repository_privacy.py --history
 ```
 
-Also inspect the complete staged diff and Git object history. Automated checks reduce risk but do not replace human review.
+The scanner enforces the exact generated-fixture allowlist and checks every reachable Git blob. Also inspect the complete staged diff and large Git objects manually. Automated checks reduce risk but cannot prove that arbitrary content contains no personal identifier.
 
 ## App-managed uploads
 
-The planned app retains uploaded ZIP/folder sources by default for future parser upgrades. It will show retained-source and processed-database disk usage and provide a deletion control. Users should be told that local exports may also be copied by operating-system backups.
+The app retains uploaded ZIP/folder sources by default for future parser upgrades. Settings shows retained-source and processed-database disk usage. **Manage imports** deletes an individual retained source; **Settings → Remove processed health data** deletes the active processed database while retaining sources and preferences. These actions are separate to prevent ambiguous deletion.
 
-Configured-path imports are read in place and are never duplicated.
+Configured-path imports are read in place and are never duplicated or deleted by the app. Multipart temporary files are written inside the private application-data filesystem rather than a small system/container temporary partition.
+
+Local exports and databases may also be copied by Time Machine, File History, snapshots, cloud-synced folders, or other backup software.
+
+## Complete removal
+
+For a full reset, stop the viewer and remove its entire platform application-data directory listed in [`configuration.md`](configuration.md). This removes the settings database, session key, active/recovery health databases, staging data, and retained uploads. Docker users can remove the `viewer-data` volume after stopping Compose. Operating-system trash/recycle bins and backups may retain recoverable copies.
+
+Platform-specific steps are documented for [macOS](platforms/macos.md), [Windows](platforms/windows.md), and [Linux](platforms/linux.md).
 
 ## Diagnostics
 

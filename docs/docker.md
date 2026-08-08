@@ -31,6 +31,7 @@ On Windows or macOS, ensure Docker Desktop is permitted to read the selected hos
 - Host publication remains `127.0.0.1:8787:8787`.
 - The container runs as an unprivileged user.
 - The root filesystem is read-only; `/data` is the only persistent writable volume.
+- Multipart temporary files use `/data/tmp`, so realistic uploads are not constrained by a small container `/tmp` filesystem.
 - No health source is included in the image or default build context.
 - Do not use `-p 8787:8787`, which may publish the port on every host interface.
 
@@ -40,4 +41,10 @@ On Windows or macOS, ensure Docker Desktop is permitted to read the selected hos
 docker compose down
 ```
 
-Removing the `viewer-data` volume also removes local app settings and, in future phases, processed health data. Treat that as destructive and back up intentionally.
+This preserves the `viewer-data` volume. To reset only processed health data, use **Settings → Remove processed health data**. To remove settings, retained exports, processed databases, staging data, and the session key, stop the viewer and explicitly remove the `viewer-data` volume:
+
+```bash
+docker compose down --volumes
+```
+
+Treat volume removal as destructive. Docker storage snapshots or host backups may retain copies.

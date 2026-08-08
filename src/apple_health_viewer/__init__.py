@@ -19,15 +19,16 @@ def create_app(overrides: dict[str, Any] | None = None) -> Flask:
     app = Flask(__name__, instance_relative_config=False)
     configure_app(app, overrides or {})
 
+    from .security import PrivateUploadRequest, apply_security_headers, csrf_token, guard_unsafe_request
+
+    app.request_class = PrivateUploadRequest
     data_dir = Path(app.config["DATA_DIR"])
-    data_dir.mkdir(parents=True, exist_ok=True)
     init_database(app.config["SETTINGS_DATABASE"])
     app.extensions["import_manager"] = ImportManager(app)
 
     app.register_blueprint(web)
 
-    from .security import apply_security_headers, csrf_token
-
     app.jinja_env.globals["csrf_token"] = csrf_token
+    app.before_request(guard_unsafe_request)
     app.after_request(apply_security_headers)
     return app

@@ -7,12 +7,14 @@ import os
 import sqlite3
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from urllib.parse import urlparse
 import zipfile
 
 from apple_health_viewer import create_app
+from apple_health_viewer.analytics import open_health_database
 from apple_health_viewer.database import (
     create_import,
     get_import,
@@ -176,6 +178,62 @@ class ImportManagerTests(unittest.TestCase):
         self.assertEqual(recovered["status"], "failed")
         self.assertEqual(recovered["error_code"], "interrupted")
 
+    def test_activation_waits_for_active_database_readers(self) -> None:
+        first = self.manager.start(SourceSpec("configured_path", FIXTURE, "Synthetic export"))
+        self.assertEqual(self.manager.wait(first.id, timeout=10)["status"], "succeeded")
+        connection = open_health_database(self.manager.active_database)
+        try:
+            replacement = self.manager.start(
+                SourceSpec("configured_path", FIXTURE, "Synthetic replacement")
+            )
+            for _ in range(200):
+                snapshot = self.manager.get(replacement.id)
+                if snapshot and snapshot["phase"] == "Activating imported snapshot":
+                    break
+                threading.Event().wait(0.01)
+            self.assertEqual(self.manager.get(replacement.id)["phase"], "Activating imported snapshot")
+            self.assertEqual(self.manager.get(replacement.id)["status"], "running")
+        finally:
+            connection.close()
+        self.assertEqual(self.manager.wait(replacement.id, timeout=10)["status"], "succeeded")
+
+    def test_processed_removal_restores_snapshot_when_metadata_update_fails(self) -> None:
+        self.manager.active_database.write_bytes(b"synthetic processed snapshot")
+        set_setting(self.app.config["SETTINGS_DATABASE"], "setup_complete", "true")
+        set_setting(self.app.config["SETTINGS_DATABASE"], "active_source_label", "Synthetic export")
+        with patch(
+            "apple_health_viewer.import_manager.update_settings",
+            side_effect=[sqlite3.OperationalError("synthetic failure"), None],
+        ):
+            with self.assertRaises(sqlite3.OperationalError):
+                self.manager.remove_processed_data()
+        self.assertEqual(
+            self.manager.active_database.read_bytes(),
+            b"synthetic processed snapshot",
+        )
+        self.assertFalse((self.data_dir / "health.sqlite3.removing").exists())
+        self.assertEqual(get_setting(self.app.config["SETTINGS_DATABASE"], "setup_complete"), "true")
+
+    def test_staging_failure_does_not_wedge_import_manager(self) -> None:
+        with patch(
+            "apple_health_viewer.import_manager.ensure_private_directory",
+            side_effect=PermissionError("synthetic denied path"),
+        ):
+            job = self.manager.start(SourceSpec("configured_path", FIXTURE, "Synthetic export"))
+            result = self.manager.wait(job.id, timeout=5)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error_code"], "unexpected")
+        self.assertFalse(self.manager.is_busy())
+
+        retry = self.manager.start(SourceSpec("configured_path", FIXTURE, "Synthetic retry"))
+        self.assertEqual(self.manager.wait(retry.id, timeout=10)["status"], "succeeded")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permissions only")
+    def test_active_health_database_is_private(self) -> None:
+        job = self.manager.start(SourceSpec("configured_path", FIXTURE, "Synthetic export"))
+        self.assertEqual(self.manager.wait(job.id, timeout=10)["status"], "succeeded")
+        self.assertEqual(self.manager.active_database.stat().st_mode & 0o777, 0o600)
+
     def test_only_one_import_runs_at_a_time(self) -> None:
         release = threading.Event()
         entered = threading.Event()
@@ -221,16 +279,52 @@ class ImportRouteTests(unittest.TestCase):
     def job_from_response(self, response) -> str:
         return Path(urlparse(response.headers["Location"]).path).name
 
+    def test_upload_preflight_accounts_for_temporary_and_retained_copies(self) -> None:
+        with patch(
+            "apple_health_viewer.security.shutil.disk_usage",
+            return_value=SimpleNamespace(free=128 * 1024**2),
+        ), patch("apple_health_viewer.security.tempfile.TemporaryFile") as temporary_file:
+            response = self.client.post(
+                "/imports/upload/zip",
+                data={
+                    "csrf_token": self.token(),
+                    "zip_file": (BytesIO(b"synthetic"), "Synthetic Health.zip"),
+                },
+                content_type="multipart/form-data",
+            )
+        self.assertEqual(response.status_code, 507)
+        temporary_file.assert_not_called()
+
+    def test_cross_origin_upload_is_rejected_before_spooling(self) -> None:
+        with patch("apple_health_viewer.security.tempfile.TemporaryFile") as temporary_file:
+            response = self.client.post(
+                "/imports/upload/zip",
+                headers={"Origin": "https://attacker.invalid", "Sec-Fetch-Site": "cross-site"},
+                data={"zip_file": (BytesIO(fixture_zip()), "Synthetic Health.zip")},
+                content_type="multipart/form-data",
+            )
+        self.assertEqual(response.status_code, 403)
+        temporary_file.assert_not_called()
+
     def test_zip_upload_is_retained_imported_and_reported(self) -> None:
-        response = self.client.post(
-            "/imports/upload/zip",
-            data={
-                "csrf_token": self.token(),
-                "zip_file": (BytesIO(fixture_zip()), "Synthetic Health.zip"),
-            },
-            content_type="multipart/form-data",
-        )
+        with patch(
+            "apple_health_viewer.security.tempfile.TemporaryFile",
+            wraps=tempfile.TemporaryFile,
+        ) as temporary_file:
+            response = self.client.post(
+                "/imports/upload/zip",
+                data={
+                    "csrf_token": self.token(),
+                    "zip_file": (BytesIO(fixture_zip()), "Synthetic Health.zip"),
+                },
+                content_type="multipart/form-data",
+            )
         self.assertEqual(response.status_code, 302)
+        temporary_file.assert_called()
+        self.assertEqual(
+            Path(temporary_file.call_args.kwargs["dir"]).resolve(),
+            (self.data_dir / "tmp").resolve(),
+        )
         result = self.manager.wait(self.job_from_response(response), timeout=10)
         self.assertEqual(result["status"], "succeeded")
         sources = managed_sources(self.app.config["SETTINGS_DATABASE"])

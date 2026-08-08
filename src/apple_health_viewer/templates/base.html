@@ -28,9 +28,9 @@
       </nav>
 
       <div class="sidebar-foot">
-        <div class="privacy-status"><span aria-hidden="true"></span> Local only</div>
+        <div class="privacy-status{% if not loopback_only %} privacy-status-warning{% endif %}"><span aria-hidden="true"></span> {{ "Local only" if loopback_only else "Network exposed" }}</div>
         <a href="{{ url_for('web.settings') }}" {% if active_page == 'settings' %}aria-current="page"{% endif %}>Settings</a>
-        <small>v{{ version }} · Phase 5</small>
+        <small>v{{ version }} · Phase 6</small>
       </div>
     </aside>
 
@@ -62,6 +62,9 @@
       </header>
 
       <main id="main-content" tabindex="-1">
+        {% if not loopback_only %}
+          <div class="network-warning" role="alert"><strong>Network exposure enabled.</strong> This unauthenticated viewer is outside the supported v1 privacy boundary. Stop it and bind to 127.0.0.1 unless exposure is intentional.</div>
+        {% endif %}
         {% with messages = get_flashed_messages(with_categories=true) %}
           {% if messages %}
             <div class="messages" aria-live="polite">

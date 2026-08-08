@@ -174,6 +174,13 @@ def check() -> list[str]:
             problems.append(f"missing: {path.relative_to(ROOT)}")
         elif path.read_text(encoding="utf-8") != expected:
             problems.append(f"stale: {path.relative_to(ROOT)}")
+    actual = {
+        path.relative_to(FIXTURE_ROOT)
+        for path in FIXTURE_ROOT.rglob("*")
+        if path.is_file()
+    }
+    for relative in sorted(actual - set(FILES)):
+        problems.append(f"unexpected: {(FIXTURE_ROOT / relative).relative_to(ROOT)}")
     return problems
 
 

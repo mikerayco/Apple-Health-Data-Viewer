@@ -3,7 +3,7 @@
 A private, local-first web dashboard for exploring data exported from Apple Health.
 
 > [!IMPORTANT]
-> This project is under active development. Complete Apple Health exports can be imported locally, and Phase 5 provides responsive metric dashboards, coverage-gated insights, workout detail, tile-free routes, and local ECG waveform review.
+> This project is under active development. Complete Apple Health exports can be imported locally, and Phase 6 is hardening security, privacy, platform guidance, and release verification around the complete dashboard.
 
 ## Product goals
 
@@ -32,7 +32,7 @@ Apple Health exports can contain dates of birth, clinical metadata, precise work
 | 3 — Metrics and aggregation | Complete |
 | 4 — Dashboard and insights | Complete |
 | 5 — Workouts, routes, and ECG | Complete |
-| 6 — Hardening and public release | Not started |
+| 6 — Hardening and public release | In progress |
 
 ## Quick start
 
@@ -58,7 +58,7 @@ python -m pip install --no-deps --no-build-isolation -e .
 apple-health-viewer
 ```
 
-Open <http://127.0.0.1:8787>. See [`docs/importing.md`](docs/importing.md) for source options and transactional replacement, [`docs/metrics.md`](docs/metrics.md) for calculation methodology, and [`docs/configuration.md`](docs/configuration.md) for paths and environment variables.
+Open <http://127.0.0.1:8787>. See the clean-clone guide for [macOS](docs/platforms/macos.md), [Windows](docs/platforms/windows.md), or [Linux](docs/platforms/linux.md). Import behavior is documented in [`docs/importing.md`](docs/importing.md), calculations in [`docs/metrics.md`](docs/metrics.md), and paths/environment variables in [`docs/configuration.md`](docs/configuration.md).
 
 ### Docker
 
@@ -74,10 +74,10 @@ Docker is optional; native execution remains the default. See [`docs/docker.md`]
 python scripts/generate_synthetic_fixtures.py --check
 python -m compileall -q src scripts tests
 python -m unittest discover -s tests -v
-python scripts/check_repository_privacy.py
+python scripts/check_repository_privacy.py --history
 ```
 
-No real health data is required for automated development or CI. Dependency decisions are documented in [`docs/dependencies.md`](docs/dependencies.md). Privacy-safe full-export import and dashboard-query benchmarks are recorded in [`docs/performance.md`](docs/performance.md).
+No real health data is required for automated development or CI. Dependency decisions are documented in [`docs/dependencies.md`](docs/dependencies.md), compatibility in [`docs/compatibility.md`](docs/compatibility.md), the security review in [`docs/threat-model.md`](docs/threat-model.md), and release gates in [`docs/release-checklist.md`](docs/release-checklist.md). Privacy-safe benchmarks are recorded in [`docs/performance.md`](docs/performance.md).
 
 ## Medical disclaimer
 
